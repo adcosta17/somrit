@@ -1,7 +1,0 @@
-[submodule "htslib"]
-	path = src/htslib
-	url = https://github.com/samtools/htslib.git
-
-[submodule "parasail"]
-	path = src/parasail
-	url = https://github.com/jeffdaily/parasail.git
