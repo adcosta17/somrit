@@ -5,9 +5,12 @@ import re
 import parasail
 from intervaltree import Interval, IntervalTree
 from collections import defaultdict
+import threading
 
 scoring_matrix = parasail.matrix_create("ACGT", 5, -1)
 
+tsv_lck = threading.Lock()
+bam_lck = threading.Lock()
 
 def get_id(header, name):
     i = 0
@@ -54,7 +57,7 @@ def get_hap_set(chrom, start, window, sample_to_fastq, sample_to_bam, ref_fa, in
         #print(read)
         read_sequence = read_sequences[read+"\t"+sample]
         for name in haplotype_sequences:
-            result = parasail.sw_striped_profile_16(haplotype_profiles[name], read_sequence, 5, 4)
+            result = parasail.sg_striped_profile_16(haplotype_profiles[name], read_sequence, 5, 4)
             best_haplotype_per_read[read].append([result.score, name, read, sample])
             #print([result.score, name, read, sample])
     return (best_haplotype_per_read, haplotype_sequences, haplotype_profiles, read_sequences)
@@ -72,8 +75,8 @@ def get_realign_window(haplotype_profiles, read_sequences):
         best_score = 0
         best_hap = ""
         for hap in haplotype_profiles:
-            result = parasail.sw_striped_profile_16(haplotype_profiles[hap], read_sequence, 5, 4)
-            if result.score > best_score:
+            result = parasail.sg_striped_profile_16(haplotype_profiles[hap], read_sequence, 5, 4)
+            if result.score >= best_score:
                 best_score = result.score
                 best_hap = hap
         best_haplotype_per_read[item] = [best_hap, result]
@@ -193,17 +196,24 @@ def get_best_haplotypes(best_haplotype_per_read, haplotype_profiles, haplotype_s
     best_haplotype_profiles["base"] = haplotype_profiles["base"]
     # For each read get set of haps that are within 5% of the best to account for small scoring variations
     top_set = defaultdict(list)
+    total_scores = defaultdict(int)
     for read in best_haplotype_per_read:
         best_haplotype_per_read[read] = sorted(best_haplotype_per_read[read], key=lambda x: x[0], reverse=True)
         max_score = -1
+        if best_haplotype_per_read[read][0][1] == "base":
+            # Best alignment is to the reference
+            continue
         for item in best_haplotype_per_read[read]:
             if item[1] == "base":
                 continue
             if max_score == -1:
                 max_score = item[0]
+                top_set[read].append(item[1])
+                total_scores[item[1]] += item[0]
                 continue
             if float(item[0])/max_score > 0.95:
                 top_set[read].append(item[1])
+                total_scores[item[1]] += item[0]
     # Top set should have all the best haplotypes for each read
     reads = list(top_set.keys())
     seen = {}
@@ -218,7 +228,7 @@ def get_best_haplotypes(best_haplotype_per_read, haplotype_profiles, haplotype_s
                 continue
             if j in seen:
                 continue
-            if top_set[reads[i]] == top_set[reads[j]]:
+            if sorted(top_set[reads[i]]) == sorted(top_set[reads[j]]):
                 seen[j] = 1
                 groups[i].append(reads[j])
     # Have the groups 
@@ -228,18 +238,86 @@ def get_best_haplotypes(best_haplotype_per_read, haplotype_profiles, haplotype_s
             # The base was the best hap only, Its already been added to the set
             pass
         else:
-            # Select the longest hap from the best haps list
-            max_len = 0
+            # Select the highest scoring hap from the best haps list
+            max_score = 0
             max_hap = ""
             for hap in best_haps:
-                if len(haplotype_sequences[hap]) > max_len:
-                    max_len = len(haplotype_sequences[hap])
+                if total_scores[hap] > max_score:
+                    max_score = total_scores[hap]
                     max_hap = hap
             best_haplotype_profiles[max_hap] = haplotype_profiles[max_hap]
     return best_haplotype_profiles
 
+
+def realign_for_window(inserts_per_chrom, chrom, i, window, sample_to_fastq, sample_to_bam, ref_fa, ref_window, chrom_seq, header, out_tsv, outf):
+    global tsv_lck
+    global bam_lck
+    insert_list = inserts_per_chrom[chrom][i:i+window]
+    insert_reads = {}
+    if len(insert_list) == 0:
+        return
+    for item in insert_list:
+        insert_reads[item.data[0][3]+"\t"+item.data[1]] = 1
+    # Generate set of alternative haplotypes by splicing in insert sequence
+    best_haplotype_per_read, haplotype_sequences, haplotype_profiles, read_sequences = get_hap_set(chrom, i, window, sample_to_fastq, sample_to_bam, ref_fa, insert_list, ref_window)
+    # Compute best mapping haplotype set
+    best_haplotype_profiles = get_best_haplotypes(best_haplotype_per_read, haplotype_profiles, haplotype_sequences)
+    # Map all reads to the set of best haplotype sequences
+    reads_in_window_to_haplotypes = get_realign_window(best_haplotype_profiles, read_sequences)
+    reads_per_haplotype = defaultdict(list)
+    # Get list of reads that support each haplotype in reads_in_window_to_halpotypes
+    for item in reads_in_window_to_haplotypes:
+        read = item.split('\t')[0]
+        sample = item.split('\t')[1]
+        hap = reads_in_window_to_haplotypes[item][0]
+        reads_per_haplotype[hap].append([read,sample])
+    # For each hap compute the TSV record. Include insertion sequence and list of supporting reads
+    for hap in reads_per_haplotype:
+        if hap == "base":
+            continue
+        # First get the positions of the main entry 
+        tsv_row = [chrom, str(i+haplotype_sequences[hap][1]), str(i+haplotype_sequences[hap][1]+1), hap+'_insert_hap', haplotype_sequences[hap][2]]
+        # Then get the positions for each supporting read baed on the re-alignment for that read
+        reads = []
+        for item in reads_per_haplotype[hap]:
+            reads.append(item[0]+'_'+item[1])
+        tsv_row.append(','.join(reads))
+        tsv_lck.acquire()
+        out_tsv.write('\t'.join(tsv_row)+'\n')
+        tsv_lck.release()
+        # Can then generate a BAM record for each haplotype sequence mapped to the reference
+        # Need to Re-Map haplotype sequence to the reference to get cigar string
+        result = parasail.sg_trace_striped_16(haplotype_sequences[hap][0], chrom_seq[i-len(haplotype_sequences[hap][0]):i+len(haplotype_sequences[hap][0])], 5, 4, scoring_matrix)
+        start_pos, cleaned_cigar = get_start_pos(result)
+        ###################################################################################
+        # Use Different CIGAR string as parasial may not align insert as single insertion #
+        ###################################################################################
+        insert_pos = haplotype_sequences[hap][1]
+        cleaned_cigar = str(ref_window+insert_pos)+"M"+str(len(haplotype_sequences[hap][2]))+"I"+str(ref_window-insert_pos+1)+"M"
+        # Create alignment record for the haplotype based on CIGAR string
+        start_pos = i-len(haplotype_sequences[hap][0]) + start_pos
+        a = pysam.AlignedSegment(header=header)
+        a.query_name = hap+'_insert_hap'
+        a.flag = 0
+        a.reference_id = get_id(header, chrom)
+        a.reference_start = start_pos
+        a.mapping_quality = 60
+        a.cigarstring = cleaned_cigar
+        a.query_sequence = haplotype_sequences[hap][0]
+        bam_lck.acquire()
+        outf.write(a)
+        bam_lck.release()
+
+def runner(param_list, i):
+    count = 0
+    for item in param_list:
+        realign_for_window(*item)
+        count += 1
+        if count % 100 == 0:
+            print("Thread "+str(i)+" at "+str(count))
+
 # Assumes that the bam_list and tsv_list line up, will throw an error if they don't
-def realign_candidate_insertions(bam_list, tsv_list, fastq_list, output_tsv, output_bam, window, ref, ref_window):
+def realign_candidate_insertions(bam_list, tsv_list, fastq_list, output_tsv, output_bam, window, ref, ref_window, threads):
     # Parse bam and tsv lists. Check if they are same size
     bams = bam_list.split(',')
     tsvs = tsv_list.split(',')
@@ -268,7 +346,7 @@ def realign_candidate_insertions(bam_list, tsv_list, fastq_list, output_tsv, out
                 if count == 0:
                     count = 1
                     continue
-                row = line.split('\t')
+                row = line.strip().split('\t')
                 if row[8] != "PASS":
                     continue
                 chrom = row[0]
@@ -279,8 +357,11 @@ def realign_candidate_insertions(bam_list, tsv_list, fastq_list, output_tsv, out
                     min_pos_per_chrom[chrom] = int(row[1])
                 if int(row[1]) > max_pos_per_chrom[chrom]:
                     max_pos_per_chrom[chrom] = int(row[1])
+    thread_list = []
     # Re-align each insertion on its own first. If the insert does not map end to end then it may be off
     # We will align these insertions to other passinng inserts that do align end to end in a later step
+    params_for_threads = defaultdict(list)
+    count = 0
     with open(output_tsv, 'w') as out_tsv:
         out_tsv.write("Chromosome\tStart\tEnd\tAltHaplotypeRead\tInsertSequence\tSupportingReads\n")
         with pysam.AlignmentFile(output_bam, "wb", header=header) as outf:
@@ -289,64 +370,14 @@ def realign_candidate_insertions(bam_list, tsv_list, fastq_list, output_tsv, out
                 for chrom in min_pos_per_chrom:
                     chrom_seq = ref_fa.fetch(chrom)
                     for i in range(min_pos_per_chrom[chrom], max_pos_per_chrom[chrom]+window, window):
-                        insert_list = inserts_per_chrom[chrom][i:i+window]
-                        insert_reads = {}
-                        if len(insert_list) == 0:
-                            #print("No inserts at "+ str(i))
-                            continue
-                        print(i, file=sys.stderr)
-                        for item in insert_list:
-                            insert_reads[item.data[0][3]+"\t"+item.data[1]] = 1
-                        # Generate set of alternative haplotypes by splicing in insert sequence
-                        best_haplotype_per_read, haplotype_sequences, haplotype_profiles, read_sequences = get_hap_set(chrom, i, window, sample_to_fastq, sample_to_bam, ref_fa, insert_list, ref_window)
-                        # Compute best mapping haplotype set
-                        best_haplotype_profiles = get_best_haplotypes(best_haplotype_per_read, haplotype_profiles, haplotype_sequences)
-                        # Map all reads to the set of best haplotype sequences
-                        reads_in_window_to_haplotypes = get_realign_window(best_haplotype_profiles, read_sequences)
-                        reads_per_haplotype = defaultdict(list)
-                        # Get list of reads that support each haplotype in reads_in_window_to_halpotypes
-                        for item in reads_in_window_to_haplotypes:
-                            read = item.split('\t')[0]
-                            sample = item.split('\t')[1]
-                            hap = reads_in_window_to_haplotypes[item][0]
-                            reads_per_haplotype[hap].append([read,sample])
-                        # For each hap compute the TSV record. Include insertion sequence and list of supporting reads
-                        for hap in reads_per_haplotype:
-                            if hap == "base":
-                                continue
-                            # First get the positions of the main entry 
-                            tsv_row = [chrom, str(i+haplotype_sequences[hap][1]), str(i+haplotype_sequences[hap][1]+1), hap+'_insert_hap', haplotype_sequences[hap][2]]
-                            # Then get the positions for each supporting read baed on the re-alignment for that read
-                            reads = []
-                            for item in reads_per_haplotype[hap]:
-                                # Get the re-alignmnet record and compute the position of the insertion based on parsing the cigar string
-                                #result = reads_in_window_to_haplotypes[item[0]+'\t'+item[1]][1]
-                                #read_sequence = read_sequences[item[0]+'\t'+item[1]]
-                                #upstream_result = parasail.sw_trace_striped_profile_16(upstream_profile, read_sequence, 5, 4)
-                                #downstream_result = parasail.sw_trace_striped_profile_16(downstream_profile, read_sequence, 5, 4)
-                                #start_pos, end_pos = get_start_end_pos(result, haplotype_sequences[hap][1] + ref_window, len(haplotype_sequences[hap][2]))
-                                reads.append(item[0]+'_'+item[1])
-                            tsv_row.append(','.join(reads))
-                            out_tsv.write('\t'.join(tsv_row)+'\n')
-                            # Can then generate a BAM record for each haplotype sequence mapped to the reference
-                            # Need to Re-Map haplotype sequence to the reference to get cigar string
-                            result = parasail.sg_trace_striped_16(haplotype_sequences[hap][0], chrom_seq[i-len(haplotype_sequences[hap][0]):i+len(haplotype_sequences[hap][0])], 5, 4, scoring_matrix)
-                            start_pos, cleaned_cigar = get_start_pos(result)
-                            ###################################################################################
-                            # Use Different CIGAR string as parasial may not align insert as single insertion #
-                            ###################################################################################
-                            cleaned_cigar = str(ref_window)+"M"+str(len(haplotype_sequences[hap][2]))+"I"+str(ref_window)+"M"
-                            # Create alignment record for the haplotype based on CIGAR string
-                            start_pos = i-len(haplotype_sequences[hap][0]) + start_pos
-                            a = pysam.AlignedSegment(header=header)
-                            a.query_name = hap+'_insert_hap'
-                            a.flag = 0
-                            a.reference_id = get_id(header, chrom)
-                            a.reference_start = start_pos
-                            a.mapping_quality = 60
-                            a.cigarstring = cleaned_cigar
-                            a.query_sequence = haplotype_sequences[hap][0]
-                            outf.write(a)
-
-
-
+                        params_for_threads[count % threads].append((inserts_per_chrom, chrom, i, window, sample_to_fastq, sample_to_bam, ref_fa, ref_window, chrom_seq, header, out_tsv, outf))
+                        count += 1
+                print("Running")
+                print("Found "+str(count)+" windows. Estimated: "+str(count/threads)+" windows per thread", flush=True)
+                for i in params_for_threads:
+                    t = threading.Thread(target = runner, args = (params_for_threads[i], i))
+                    thread_list.append(t)
+                    t.start()
+                for t in thread_list:
+                    t.join()
+    print("Done")

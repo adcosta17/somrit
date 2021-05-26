@@ -25,6 +25,7 @@ realign_parser.add_argument('--reference-genome', type=str, required=True)
 realign_parser.add_argument('--output-bam', type=str, required=False, default="")
 realign_parser.add_argument('--cluster-window', type=int, required=False, default=1000)
 realign_parser.add_argument('--reference-window', type=int, required=False, default=5000)
+realign_parser.add_argument('--threads', type=int, required=False, default=1)
 
 args = parser.parse_args()
 
@@ -37,7 +38,7 @@ elif sys.argv[1] == "extract":
 elif sys.argv[1] == "realign":
     #print("Realigning Insertions")
     from src.realign import realign_candidate_insertions
-    realign_candidate_insertions(args.bam_list, args.tsv_list, args.fastq_list, args.output_tsv, args.output_bam, args.cluster_window, args.reference_genome, args.reference_window)
+    realign_candidate_insertions(args.bam_list, args.tsv_list, args.fastq_list, args.output_tsv, args.output_bam, args.cluster_window, args.reference_genome, args.reference_window, args.threads)
 elif sys.argv[1] == "classify":
     pass
 elif sys.argv[1] == "filter":
