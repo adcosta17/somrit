@@ -4,6 +4,7 @@ import re
 from collections import defaultdict
 import pysam
 import mappy as mp
+from intervaltree import Interval, IntervalTree
 
 
 def get_annotation(read_sequence, control_aligner, to_print):
@@ -47,67 +48,67 @@ def get_consensus(result_dict):
     else:
         return (max_annotation, 0)
 
-def classify_insertions(input_tsv, control_sequences_file, output_tsv, fastq_list):
+def classify_insertions(tsv_list, control_sequences_file, output_tsv, fastq_list, realign_tsv, samples):
     # First load in control_sequences. Assume this is a fasta file
     control_aligner = mp.Aligner(control_sequences_file)
     fastqs = []
     for file in fastq_list.strip().split(','):
         fastqs.append(pysam.FastaFile(filename=file))
-    # For each insertion in tsv, read in insert sequence, map it using parasail to control sequences
+    # For each insertion in tsv, read in insert sequence, map it using minimap2 to control sequences
     # If we reach some min percent identity then consider it mapped
     with open(output_tsv, 'w') as out_tsv:
-        with open(input_tsv, 'r') as in_tsv:
-            count = 0
-            for line in in_tsv:
-                if count == 0:
-                    count = 1
-                    out_tsv.write(line.strip()+"\tAnnotation\tConsensustRTFamily\tFraction\tRTFamily\tScore\tPercentIdentityRead\tPercentIdentityControl\tInsertAnnotationStart\tInsertAnnotationEnd\tAnnotationStart\tAnnotationEnd\n")
-                    continue
-                row = line.strip().split('\t')
-                results = defaultdict(int)
-                read_positions = defaultdict(list)
-                if len(row) > 5:
+        # Classify Re-aligned inserts first and then do individual ones that did not get re-aligned
+        out_tsv.write("Chromosome\tStart\tEnd\tName\tInsertSequence\tSupportingReads\tAnnotation\tRTFamily\tScore\tPercentIdentityRead\tPercentIdentityControl\tInsertAnnotationStart\tInsertAnnotationEnd\tAnnotationStart\tAnnotationEnd\n")
+        seen = defaultdict(IntervalTree)
+        if realign_tsv is not None:
+            with open(realign_tsv, 'r') as in_tsv:
+                count = 0
+                for line in in_tsv:
+                    if count == 0:
+                        count = 1
+                        continue
+                    row = line.strip().split('\t')
+                    result = get_annotation(row[4], control_aligner, False)
+                    annotation = "PASS"
+                    if "No_Mapping" in result:
+                        annotation = "no_rt_mapping"
+                    out_tsv.write("\t".join(row)+"\t"+annotation+"\t"+"\t".join(result)+"\n")
+                    chrom = row[0]
+                    start = int(row[1])
+                    end =  int(row[2])
                     for read_insert in row[5].split(','):
-                        sample = read_insert.split(':')[0]
                         read = read_insert.split(':')[1]
-                        orientation = read_insert.split(':')[2]
-                        insert_start = int(read_insert.split(':')[3].split('-')[0])
-                        insert_end = int(read_insert.split(':')[3].split('-')[1])
-                        read_positions[read] = [insert_start, insert_end, orientation]
-                else:
-                    row.append("NA")
-                # Get sequence from reads
-                for fastq in fastqs:
-                    for read in read_positions:
-                        try:
-                            seq = fastq.fetch(read)
-                            if read_positions[read][2] == '-':
-                                seq = reverse_complement(seq)
-                            insert_seq = seq[read_positions[read][0]:read_positions[read][1]+1]
-                            # Align insert seq
-                            result = get_annotation(insert_seq, control_aligner, False)
-                            if float(result[3]) < 0.5:
-                                results["No_Mapping"] += 1
-                            elif "LINE" in result[0]:
-                                results["LINE"] += 1
-                            elif "SINE" in result[0]:
-                                results["SINE"] += 1
-                            elif "ERV" in result[0]:
-                                results["ERV"] += 1
-                            elif "SVA" in result[0]:
-                                results["SVA"] += 1
-                            else:
-                                results["No_Mapping"] += 1
-                        except KeyError:
-                            # Read not found in this fastq
-                            pass
-                # Get annotation for representative haplotype sequence
-                result = get_annotation(row[4], control_aligner, False)
-                # Check result percent identity against minimum
-                con_ann, con_frac = get_consensus(results)
-                annotation = "PASS"
-                if "No_Mapping" in result:
-                    annotation = "no_rt_mapping"
-                out_tsv.write("\t".join(row)+"\t"+annotation+"\t"+con_ann+"\t"+str(con_frac)+"\t"+"\t".join(result)+"\n")
+                        seen[chrom][start:end] = read
+        for i in range(len(tsv_list.split(','))):
+            file = tsv_list.split(',')[i]
+            sample = samples[i]
+            with open(file, 'r') as in_tsv:
+                count = 0
+                for line in in_tsv:
+                    if count == 0:
+                        count = 1
+                        continue
+                    row = line.strip().split('\t')
+                    chrom = row[0]
+                    start = int(row[1]) - 1000
+                    end =  int(row[2]) + 1000
+                    nearby = seen[chrom][start:end]
+                    skip = False
+                    if len(nearby) > 0:
+                        for item in nearby:
+                            if row[3] in item.data:
+                                skip = True
+                                break
+                    if skip:
+                        # Have re-aligned this insertion on this read already
+                        continue
+                    result = get_annotation(row[4], control_aligner, False)
+                    annotation = row[8]
+                    if "No_Mapping" in result:
+                        if annotation == "PASS":
+                            annotation = "no_rt_mapping"
+                        else: 
+                            annotation += ",no_rt_mapping"
+                    out_tsv.write(row[0]+"\t"+row[1]+"\t"+row[2]+"\t"+row[3]+":"row[4]+"-"+row[5]+"\t"+sample+":"+row[3]+":"+row[6]+":"row[4]+"-"+row[5]+"\t"+row[7]+"\t"+annotation+"\t"+"\t".join(result)+"\n")
 
 

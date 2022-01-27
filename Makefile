@@ -37,11 +37,11 @@ gaba_wrapper.o: gaba_wrapper.c
 # g++ -c -Wall -Wextra -O2 -std=c++14 -fPIC ReAlign.cpp $(HTS_INCLUDE) $(PARASAIL_INCLUDE) $(WFA_INCLUDE) -lhts -lparasail -lwfa -o ReAlign.o
 ReAlign: ReAlign.cpp ReAlign.hpp
 	#g++ -Wall -Wextra -O2 -std=c++14 -fPIC -c ./edlib/edlib/src/edlib.cpp $(EDLIB_INCLUDE) -o edlib.o
-	g++ -c -g -Wall -Wextra -O2 -std=c++14 -fPIC ReAlign.cpp $(HTS_INCLUDE) $(MINIMAP_INCLUDE) $(ABPOA_INCLUDE) -lhts -labpoa -lminimap2 -o ReAlign.o
+	g++ -c -g -Wall -Wextra -O2 -std=c++14 -fPIC ReAlign.cpp $(HTS_INCLUDE) $(MINIMAP_INCLUDE) $(SPOA_INCLUDE) $(ABPOA_INCLUDE) -lhts -labpoa -lminimap2 -lspoa -o ReAlign.o
 
 # g++ -shared -Wall -Wextra -std=c++14 -fPIC ReAlign.o $(HTS_LIB) $(HTS_INCLUDE) $(PARASAIL_INCLUDE) $(WFA_INCLUDE) $(LIBS) $(LDFLAGS) -o librealign.so
 librealign.so: ReAlign.o
-	g++ -shared -g -Wall -Wextra -std=c++14 -fPIC -o librealign.so ReAlign.o $(HTS_STATIC_LIB) $(HTS_INCLUDE) $(MINIMAP_INCLUDE) $(ABPOA_INCLUDE) $(LIBS) $(LDFLAGS)
+	g++ -shared -g -Wall -Wextra -std=c++14 -fPIC -o librealign.so ReAlign.o $(HTS_STATIC_LIB) $(HTS_INCLUDE) $(MINIMAP_INCLUDE) $(SPOA_INCLUDE) $(ABPOA_INCLUDE) $(LIBS) $(LDFLAGS)
 	
 test: ReAlign.cpp ReAlign.hpp
 	g++ -g -Wall -Wextra -O2 -std=c++14 -fPIC ReAlign.cpp $(HTS_LIB) $(HTS_INCLUDE) $(MINIMAP_INCLUDE) $(SPOA_INCLUDE) $(ABPOA_INCLUDE) $(LIBS) $(LDFLAGS) -o test
