@@ -415,6 +415,7 @@ def get_tsv_record(record, max_ref_gap_at_candidate, min_detected_inclusion_leng
     # check for any long insertions
     insert_positions = get_insertion_pos(record.cigarstring, min_detected_inclusion_length)
     count = 0
+    merged = False
     for insert in insert_positions:
         ref_start = insert[2]+record.ref_start
         ref_end = insert[2]+1+record.ref_start
@@ -427,9 +428,8 @@ def get_tsv_record(record, max_ref_gap_at_candidate, min_detected_inclusion_leng
             tmp = len(record.read_seq) - read_start
             read_start = len(record.read_seq) - read_end
             read_end = tmp
-        is_merged = "0"
         if record.merged:
-            is_merged = "1"
+            merged = True
         annotation = read_annotation
         if not ((abs(ref_start - record.ref_start) > int(min_flank_size)) and 
             (abs(record.ref_end - ref_end) > int(min_flank_size))):
@@ -456,11 +456,11 @@ def get_tsv_record(record, max_ref_gap_at_candidate, min_detected_inclusion_leng
         output = "%s\t%d\t%d\t%s\t%d\t%d\t%s\t%s\t%s" % (record.ref_name, ref_start, ref_end, record.query_name, read_start, read_end, record.orientation, insertion_sequence,annotation)
         records_to_output[count] = output
         count += 1
-    return records_to_output
+    return records_to_output, merged
 
 
 class myThread (threading.Thread):
-   def __init__(self, i, q,header, reference_gap_minimum, min_mapq, min_detected_inclusion_length, in_fq, min_insertion_length, min_flank_size, t_lock, f_lock, out_tsv):
+   def __init__(self, i, q,header, reference_gap_minimum, min_mapq, min_detected_inclusion_length, in_fq, min_insertion_length, min_flank_size, t_lock, f_lock, out_tsv, out_merged):
       threading.Thread.__init__(self)
       self.i = i
       self.q = q
@@ -474,6 +474,7 @@ class myThread (threading.Thread):
       self.t_lock = t_lock
       self.f_lock = f_lock
       self.out_tsv = out_tsv
+      self.out_merged = out_merged
    def run(self):
         count = 0
         merge_time = 0
@@ -492,17 +493,21 @@ class myThread (threading.Thread):
             # Go read by read based on sorted records. Merge first and then extract
             new_records = merge_records(records, self.header, self.reference_gap_minimum, self.min_mapq, self.min_detected_inclusion_length, self.in_fq, self.f_lock)
             for c in new_records:
-                inserts = get_tsv_record(new_records[c], self.reference_gap_minimum, self.min_detected_inclusion_length, self.min_mapq, self.min_insertion_length, self.min_flank_size)
+                inserts, merged = get_tsv_record(new_records[c], self.reference_gap_minimum, self.min_detected_inclusion_length, self.min_mapq, self.min_insertion_length, self.min_flank_size)
                 for c in inserts:
                     self.t_lock.acquire()
                     self.out_tsv.write(inserts[c]+"\n")
                     self.t_lock.release()
+                if merged:
+                    self.t_lock.acquire()
+                    self.out_merged.write(read_id+"\n")
+                    self.t_lock.release()
 
 
-def extract_candidate_insertions(bam, output_tsv, min_insertion_length, min_detected_inclusion_length, min_flank_size, min_mapq, reference_gap_minimum, fastq_file, threads):
+def extract_candidate_insertions(bam, output_tsv, output_merged, min_insertion_length, min_detected_inclusion_length, min_flank_size, min_mapq, reference_gap_minimum, fastq_file, threads):
     t_lock = threading.Lock()
     f_lock = threading.Lock()
-    with open(output_tsv, 'w') as out_tsv, pysam.FastaFile(filename = fastq_file) as in_fq:
+    with open(output_tsv, 'w') as out_tsv, open(output_merged, 'w') as out_merged, pysam.FastaFile(filename = fastq_file) as in_fq:
         out_tsv.write("\t".join(["chromosome", "reference_insertion_start", "reference_insertion_end", "read_name", "read_insertion_start", "read_insertion_end", "orientation", "insertion_sequence","pass_fail"])+"\n")
         header = pysam.AlignmentFile(bam).header
         sam_reader = pysam.AlignmentFile(bam)
@@ -522,7 +527,7 @@ def extract_candidate_insertions(bam, output_tsv, min_insertion_length, min_dete
                 count += 1
             thread_list = [None] *threads
             for i in range(threads):
-                thread_list[i] = myThread(i, q_list[i], header, reference_gap_minimum, min_mapq, min_detected_inclusion_length, in_fq, min_insertion_length, min_flank_size,t_lock,f_lock,out_tsv)
+                thread_list[i] = myThread(i, q_list[i], header, reference_gap_minimum, min_mapq, min_detected_inclusion_length, in_fq, min_insertion_length, min_flank_size,t_lock,f_lock,out_tsv,out_merged)
                 thread_list[i].start()
             for i in range(threads):
                 thread_list[i].join()

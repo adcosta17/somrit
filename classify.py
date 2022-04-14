@@ -68,6 +68,9 @@ def classify_insertions(tsv_list, control_sequences_file, output_tsv, fastq_list
                         count = 1
                         continue
                     row = line.strip().split('\t')
+                    if len(row) < 6:
+                        # Concensus not supported by any reads. Likely computed but not more favorable than the original reference
+                        continue
                     result = get_annotation(row[4], control_aligner, False)
                     annotation = "PASS"
                     if "No_Mapping" in result:
@@ -76,7 +79,9 @@ def classify_insertions(tsv_list, control_sequences_file, output_tsv, fastq_list
                     chrom = row[0]
                     start = int(row[1])
                     end =  int(row[2])
+                    #print(row)
                     for read_insert in row[5].split(','):
+                        #print(read_insert)
                         read = read_insert.split(':')[1]
                         seen[chrom][start:end] = read
         for i in range(len(tsv_list.split(','))):
@@ -102,13 +107,13 @@ def classify_insertions(tsv_list, control_sequences_file, output_tsv, fastq_list
                     if skip:
                         # Have re-aligned this insertion on this read already
                         continue
-                    result = get_annotation(row[4], control_aligner, False)
+                    result = get_annotation(row[7], control_aligner, False)
                     annotation = row[8]
                     if "No_Mapping" in result:
                         if annotation == "PASS":
                             annotation = "no_rt_mapping"
                         else: 
                             annotation += ",no_rt_mapping"
-                    out_tsv.write(row[0]+"\t"+row[1]+"\t"+row[2]+"\t"+row[3]+":"row[4]+"-"+row[5]+"\t"+sample+":"+row[3]+":"+row[6]+":"row[4]+"-"+row[5]+"\t"+row[7]+"\t"+annotation+"\t"+"\t".join(result)+"\n")
+                    out_tsv.write(row[0]+"\t"+row[1]+"\t"+row[2]+"\t"+row[3]+":"+row[4]+"-"+row[5]+"\t"+row[7]+"\t"+sample+":"+row[3]+":"+row[6]+":"+row[4]+"-"+row[5]+"\t"+"\t"+annotation+"\t"+"\t".join(result)+"\n")
 
 

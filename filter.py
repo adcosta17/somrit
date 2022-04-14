@@ -51,16 +51,29 @@ def filter_insert_map(chrom, start, end, read_positions, sequences, bam_read_pos
         return "In_Secondary_Mapping_"+str(len(read_failed))
     return None
 
-def filter_mapping_qual(chrom, start, end, bam_list, min_mapq):
+def filter_mapping_qual(chrom, start, end, bam_ref_positions, min_mapq, chrom_list):
     # Look at all the reads that map in the region at the insertion. If more than half are of mapq < 20. Flag
     count = 0
     low_mapq = 0
-    for bam in bam_list.split(','):
-        reader = pysam.AlignmentFile(bam)
-        for record in reader.fetch(region=chrom+":"+str(start)+"-"+str(end)):
-            count += 1
-            if record.mapping_quality < min_mapq:
-                low_mapq += 1
+    if chrom not in bam_ref_positions or chrom not in chrom_list:
+        return None
+    for pos in bam_ref_positions[chrom]:
+        pos_start = pos.split('-')[0]
+        pos_end = pos.split('-')[1]
+        if len(pos_start) == 0:
+            continue
+        if len(pos_end) == 0:
+            continue
+        pos_start = int(pos_start)
+        pos_end = int(pos_end)
+        if start > pos_start and end < pos_end:
+            for item in bam_ref_positions[chrom][pos]:
+                if item[2] < start and item[3] > end:
+                    count += 1
+                    if item[1] < min_mapq:
+                        low_mapq += 1
+    if count == 0:
+        return None
     if low_mapq/count > 0.5:
         return "Low_Mapping_Quality_Region"
     return None
@@ -107,6 +120,10 @@ def filter_TSD(read_positions, sequences):
         if read_start+25 > read_end-25:
             # Have too small an insertion
             continue
+        if (read_start-25) < 0 or (read_end -25) < 0 :
+            continue
+        if (read_start+25) >= len(sequences[read]) or (read_end+25) >= len(sequences[read]):
+            continue
         insert_start_seq = sequences[read][read_start-25:read_start+25]
         insert_end_seq = sequences[read][read_end-25:read_end+25]
         # Need to look for duplication between the two
@@ -129,10 +146,11 @@ def update_annotation(annotation, filters):
                 ret = ","+f
     return ret
 
-def filter_insertions(input_tsv, output_tsv, bam_list, fastq_list, contromeres, telomeres, control_sample, min_mapq, ref):
+def filter_insertions(input_tsv, output_tsv, bam_list, fastq_list, contromeres, telomeres, control_sample, min_mapq, ref, cluster_window, chrs_to_use):
     # Open and read in centromere and telomere positions
     telomere_positions= defaultdict(IntervalTree)
     centromere_positions = defaultdict(IntervalTree)
+    chrom_list = chrs_to_use.split(',')
     with open(telomeres) as in_tf:
         count = 0
         for line in in_tf:
@@ -160,13 +178,58 @@ def filter_insertions(input_tsv, output_tsv, bam_list, fastq_list, contromeres, 
     fastqs = []
     for file in fastq_list.strip().split(','):
         fastqs.append(pysam.FastaFile(filename=file))
+    print("Fastqs")
+    all_positions_list = defaultdict(list)
+    with open(input_tsv, 'r') as in_tsv:
+        count = 0
+        for line in in_tsv:
+            if count == 0:
+                count = 1
+                continue
+            row = line.strip().split('\t')
+            all_positions_list[row[0]].append((int(row[1])-cluster_window, int(row[2])+cluster_window))
+    print("All Positions")
+    for chrom in all_positions_list:
+        sorted_by_lower_bound = sorted(all_positions_list[chrom], key=lambda tup: tup[0])
+        merged = []
+        for higher in sorted_by_lower_bound:
+            if not merged:
+                merged.append(higher)
+            else:
+                lower = merged[-1]
+                # test for intersection between lower and higher:
+                # we know via sorting that lower[0] <= higher[0]
+                if higher[0] <= lower[1]:
+                    upper_bound = max(lower[1], higher[1])
+                    merged[-1] = (lower[0], upper_bound)  # replace by merged interval
+                else:
+                    merged.append(higher)
+        all_positions_list[chrom] = merged
+    print("Merged")
+    all_positions = defaultdict(IntervalTree)
+    for chrom in all_positions_list:
+        for pos in all_positions_list[chrom]:
+            start = pos[0]
+            end = pos[1]
+            all_positions[chrom][start:end] = 1
+    print("IntervalTree")
     # Parse through the list of bams, get the positions of all alignments
     bam_read_positions = defaultdict(list)
+    bam_ref_positions = {}
     for bam in bam_list.split(','):
         reader = pysam.AlignmentFile(bam)
         for record in reader.fetch():
             if record.mapping_quality >= min_mapq:
                 bam_read_positions[record.query_name].append([record.reference_name, record.reference_start, record.reference_end])
+            nearby = all_positions[record.reference_name][record.reference_start:record.reference_end]
+            if len(nearby) > 0:
+                # Have a record in a region we care about
+                if record.reference_name not in bam_ref_positions:
+                    bam_ref_positions[record.reference_name] = defaultdict(list)
+                for item in nearby:
+                    #print(record.query_name+" "+record.reference_name+":"+str(item.begin)+"-"+str(item.end))
+                    bam_ref_positions[record.reference_name][str(item.begin)+"-"+str(item.end)].append([record.query_name, record.mapping_quality, record.reference_start, record.reference_end])
+    print("Setup Dicts")
     ref_aligner = mp.Aligner(ref)
     # Read in tsv and then run each filter
     with open(input_tsv, 'r') as in_tsv:
@@ -181,6 +244,7 @@ def filter_insertions(input_tsv, output_tsv, bam_list, fastq_list, contromeres, 
                 sequences = defaultdict(str)
                 read_positions = defaultdict(list)
                 samples = defaultdict(int)
+                print(row[0:3])
                 for read_insert in row[5].split(','):
                     if read_insert == "NA":
                         continue
@@ -205,16 +269,22 @@ def filter_insertions(input_tsv, output_tsv, bam_list, fastq_list, contromeres, 
                 ret = []
                 # Control sample if requested
                 ret.append(filter_control(samples, control_sample))
+                print("control")
                 # Centromere/telomere
                 ret.append(filter_centromere_telomere(row, centromere_positions, telomere_positions))
+                print("filter_centromere_telomere")
                 # Insert maps to same location as other mapping for supporting reads
                 ret.append(filter_insert_map(row[0], int(row[1]), int(row[2]), read_positions, sequences, bam_read_positions, ref_aligner, min_mapq))
+                print("filter_insert_map")
                 # Low mapping quality at area of insertion
-                ret.append(filter_mapping_qual(row[0], int(row[1]), int(row[2]), bam_list, min_mapq))
+                ret.append(filter_mapping_qual(row[0], int(row[1]), int(row[2]), bam_ref_positions, min_mapq, chrom_list))
+                print("filter_mapping_qual")
                 # Poly A/T Tail
                 ret.append(filter_poly_AT(read_positions, sequences))
+                print("filter_poly_AT")
                 # Target Site Duplications
                 ret.append(filter_TSD(read_positions, sequences))
+                print("filter_TSD")
                 # Update the row's annotation based on which filters it failed
                 row[6] = update_annotation(row[6], ret)
                 out_tsv.write("\t".join(row)+'\n')
