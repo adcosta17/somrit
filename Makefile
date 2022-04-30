@@ -3,9 +3,13 @@ SUBDIRS :=.
 
 LIBS = -lz -lm -llzma -lbz2 -lpthread -lcurl -lssl -lcrypto -lgcov -ldeflate -labpoa -lminimap2 -lspoa -lz -lhts
 
-HTS_STATIC_LIB=./htslib/libhts.so
-HTS_LIB=./htslib/libhts.a
-HTS_INCLUDE=-I./htslib -I./htslib/htslib -L./htslib/htslib -L./htslib
+HTS?=install
+
+ifeq ($(HTS), install)
+	HTS_INCLUDE=-I./htslib -I./htslib/htslib -L./htslib/htslib -L./htslib
+else
+	HTS_INCLUDE=
+endif	
 
 PARASAIL_INCLUDE= -I./parasail/include -L./parasail/lib
 
@@ -24,13 +28,23 @@ SPOA_INCLUDE=-Ispoa/include/ -Ispoa -Lspoa/build/lib/
 
 # Build libhts
 #
+
+all: librealign.so
+
+clean:
+	rm librealign.so ReAlign.o
+
+# If htslib needs to be compiled
 htslib/libhts.so:
 	cd htslib && make || exit 255
 
 abPOA/lib/libabpoa.a:
 	cd abPOA && make
 
-ReAlign.o: ReAlign.cpp ReAlign.hpp
+minimap2/libminimap2.a:
+	cd minimap2 && make CC='gcc' CFLAGS=' -g -Wall -O2 -Wc++-compat -fPIC'
+
+ReAlign.o: ReAlign.cpp ReAlign.hpp abPOA/lib/libabpoa.a
 	g++ -c -g -Wall -Wextra -O2 -std=c++14 -fPIC ReAlign.cpp $(HTS_INCLUDE) $(MINIMAP_INCLUDE) $(SPOA_INCLUDE) $(ABPOA_INCLUDE) -lhts -labpoa -lminimap2 -lspoa -o ReAlign.o
 
 librealign.so: ReAlign.o

@@ -4,3 +4,6 @@
 [submodule "abPOA"]
 	path = abPOA
 	url = https://github.com/adcosta17/abPOA.git
+[submodule "minimap2"]
+	path = minimap2
+	url = https://github.com/lh3/minimap2.git
