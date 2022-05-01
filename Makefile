@@ -27,10 +27,10 @@ clean:
 
 # If htslib needs to be compiled
 htslib/libhts.so:
-	cd htslib && make || exit 255
+	cd htslib && make CC='gcc' || exit 255
 
 abPOA/lib/libabpoa.a:
-	cd abPOA && make
+	cd abPOA && make 
 
 minimap2/libminimap2.a:
 	cd minimap2 && make CC='gcc' CFLAGS=' -g -Wall -O2 -Wc++-compat -fPIC'
