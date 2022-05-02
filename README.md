@@ -12,8 +12,15 @@ somrit can be setup in a few short commands. After recursively cloning the repo,
 # Clone the somrit repo
 git clone --recursive https://github.com/adcosta17/somrit.git
 
+# Ensure submodule depencencies are also cloned
+git submodule update --init --recursive
+
+# Make minimap2 & htslib libraries, can use system htslib version instead if in path.
+make htslib/libhts.so
+make minimap2/libminimap2.a
+
 # Make the realignment library
-make librealign.so
+make 
 ```
 
 ## Modules
