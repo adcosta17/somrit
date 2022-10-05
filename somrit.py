@@ -190,6 +190,7 @@ merge_parser.add_argument('--chromosome-list', type=str, required=False, default
 merge_parser.add_argument('--bam-list', type=str, required=True)
 
 classify_parser.add_argument('--bam-list', type=str, required=True)
+classify_parser.add_argument('--sample-list', type=str, required=True)
 classify_parser.add_argument('--realign-tsv', type=str, required=False)
 classify_parser.add_argument('--tsv-list', type=str, required=True)
 classify_parser.add_argument('--output-tsv', type=str, required=True)
@@ -204,9 +205,11 @@ filter_parser.add_argument('--bam', type=str, required=True)
 filter_parser.add_argument('--fastq-list', type=str, required=True)
 filter_parser.add_argument('--control-sample', type=str, required=False, default="NA")
 filter_parser.add_argument('--min-mapq', type=int, required=False, default=20)
+filter_parser.add_argument('--min-reads', type=int, required=False, default=1)
 filter_parser.add_argument('--reference-genome', type=str, required=True)
 filter_parser.add_argument('--cluster-window', type=int, required=False, default=500)
 filter_parser.add_argument('--chromosome-list', type=str, required=False, default="all_main")
+filter_parser.add_argument('--threads', type=int, required=False, default=1)
 
 args = parser.parse_args()
 
@@ -326,13 +329,8 @@ elif sys.argv[1] == "classify":
     rt = None
     if args.realign_tsv:
         rt = args.realign_tsv
-    samples = []
-    bams = args.bam_list.split(',')
-    for i in range(len(bams)):
-        path = bams[i].split('/')
-        sample = path[len(path)-1].split(".bam")[0]
-        samples.append(sample)
-    classify_insertions(args.tsv_list, args.annotation_file, args.output_tsv, args.fastq_list, rt, samples)
+    samples = args.sample_list.split(',')
+    classify_insertions(args.tsv_list, args.bam_list, args.annotation_file, args.output_tsv, args.fastq_list, rt, samples)
 elif sys.argv[1] == "filter":
     print("Filtering Insertions")
     from filter import filter_insertions
@@ -347,6 +345,9 @@ elif sys.argv[1] == "filter":
         chr_to_use = get_chr_list()
     else:
         chr_to_use = args.chromosome_list
-    filter_insertions(args.input_tsv, args.output_tsv, args.bam, args.fastq_list, centromeres, telomeres, args.control_sample, args.min_mapq, args.reference_genome, args.cluster_window, chr_to_use)
+    threads = args.threads - 1
+    if threads <= 0:
+        threads = 1
+    filter_insertions(args.input_tsv, args.output_tsv, args.bam, args.fastq_list, centromeres, telomeres, args.control_sample, args.min_mapq, args.reference_genome, args.cluster_window, chr_to_use, args.min_reads, threads)
     pass
 

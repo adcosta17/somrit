@@ -1032,7 +1032,7 @@ void write_original(htsFile *outfile, bam_hdr_t *header, std::vector<bam1_t*>& r
 	}
 }
 
-std::unordered_map<std::string,std::unordered_map<std::string,std::vector<std::string>>> align_all_reads(std::unordered_map<std::string, std::unordered_map<std::string,std::string>>& read_sequences_per_sample, const std::string& ref_sequence, const std::vector<std::tuple<int, int, std::string, int, int, int,std::string>>& haplotypes, const int gap_open, const int gap_extend, const int min_mapq, std::string& output, const std::string& chrom, const int pos, const int max_read_len, htsFile *outfile, bam_hdr_t *header, std::unordered_set<std::string>& seen, const std::unordered_map<std::string, std::vector<bam1_t*>>& alignments_per_read, const int t, const int max_mem, const bool include_haplotypes, const std::string& tsv_output, mm_tbuf_t *tbuf){
+std::unordered_map<std::string,std::unordered_map<std::string,std::vector<std::string>>> align_all_reads(std::unordered_map<std::string, std::unordered_map<std::string,std::string>>& read_sequences_per_sample, const std::string& ref_sequence, std::unordered_map<int, std::vector<std::tuple<int, int, std::string, int, int, int,std::string>>>& haplotypes, const int gap_open, const int gap_extend, const int min_mapq, std::string& output, const std::string& chrom, const int pos, const int max_read_len, htsFile *outfile, bam_hdr_t *header, std::unordered_set<std::string>& seen, const std::unordered_map<std::string, std::vector<bam1_t*>>& alignments_per_read, const int t, const int max_mem, const bool include_haplotypes, const std::string& tsv_output, mm_tbuf_t *tbuf){
 	using namespace std;
 	unordered_map<string,unordered_map<string, vector<string>>> return_map;
 	int ref_start = pos - max_read_len;
@@ -1047,44 +1047,45 @@ std::unordered_map<std::string,std::unordered_map<std::string,std::vector<std::s
 	// Get the ref seq and the rest of the sequences 
 	unordered_map<string, string> seq_map;
 	seq_map["ref"] = ref_seq;
-	unordered_map<string,int> supporting_counts;
-	unordered_map<string, mm_idx_t*> mi_list; 
-	unordered_map<string, pair<int,int>> mapping_params;
 	int n_seqs = 1;
-	for(size_t i =0; i < haplotypes.size(); i++){
-		// Align reads to best haplotype and ref. If read aligns better to haplotype than ref, update record
-		// Output an alignment record for the haplotype
-		int insert_size = get<1>(haplotypes[i]);
-		int offset = get<0>(haplotypes[i]);
-		string best_hap_sequence = get<2>(haplotypes[i]);
-		int hap_ref_start = get<3>(haplotypes[i]);
-		int hap_ref_end = get<4>(haplotypes[i]);
-		string hap_name = get<6>(haplotypes[i]);
-		int left_flank = pos+offset-max_read_len;
-		int right_flank = pos+offset;
-		int right_flank_length = max_read_len;
-		int left_flank_length = max_read_len;
-		if(left_flank < 0){
-			left_flank = 0;
-			left_flank_length = max_read_len + left_flank;
+	//cout << t << " " << pos << endl;
+	for(size_t h =0; h < haplotypes.size(); h++){
+		// Generate an alt hap with all the insertions, if there are more than one, for each haplotype
+		// Align the read to it and the ref and see what the score is. Select the highest scoring hap
+		unordered_map<string,int> supporting_counts;
+		unordered_map<string, mm_idx_t*> mi_list; 
+		unordered_map<string, pair<int,int>> mapping_params;
+		string hap_name = to_string(h);
+		int added_bases = 0;
+		string new_hap_seq = ref_seq;
+		for(size_t i =0; i < haplotypes[h].size(); i++){
+			int hap_position = (pos + get<0>(haplotypes[h][i])) - (ref_start - added_bases);
+			//out_lock.lock();
+			//cout << t << " " << hap_name << " " << hap_position << " " << pos << " " << get<0>(haplotypes[h][i]) << " " << ref_start << " " << ref_end << " " << added_bases << " " << new_hap_seq.length()<< endl;
+			//out_lock.unlock();
+			if(hap_position > new_hap_seq.length()){
+				continue;
+			}
+			new_hap_seq = new_hap_seq.substr(0, hap_position)+get<2>(haplotypes[h][i])+new_hap_seq.substr(hap_position);
+			added_bases += get<1>(haplotypes[h][i]);
+			out_lock.lock();
+			output_map[get<6>(haplotypes[h][i])] = chrom+"\t"+to_string(pos + get<0>(haplotypes[h][i]))+"\t"+to_string(pos + get<0>(haplotypes[h][i])+1)+"\t"+get<6>(haplotypes[h][i])+"\t"+get<2>(haplotypes[h][i])+"\t";
+			out_lock.unlock();
 		}
-		if((right_flank + max_read_len) > (ref_sequence.length() -1)){
-			right_flank_length = right_flank + max_read_len - ref_sequence.length() -1;
-		}
-		string new_hap_seq = ref_sequence.substr(left_flank,left_flank_length)+best_hap_sequence+ref_sequence.substr(right_flank,right_flank_length);
-		string hap_cigar = to_string(left_flank_length)+"="+to_string(insert_size)+"I"+to_string(right_flank_length)+"=";
-		//print_debug(to_string(t)+" "+to_string(left_flank_length)+" "+to_string(insert_size)+" "+to_string(right_flank_length));
-		if(include_haplotypes){
-			int ret = write_bam_record(hap_cigar, "hap_"+hap_name, left_flank, 0, chrom, 3, new_hap_seq, outfile, header, t, "consensus");
-		}
-		out_lock.lock();
-		output_map[hap_name] = chrom+"\t"+to_string(hap_ref_start)+"\t"+to_string(hap_ref_end)+"\t"+hap_name+"\t"+best_hap_sequence+"\t";
-		out_lock.unlock();
+		//if(include_haplotypes){
+			//TODO: compute alt hap cigar
+			//string hap_cigar = to_string(left_flank_length)+"="+to_string(insert_size)+"I"+to_string(right_flank_length)+"=";
+			//print_debug(to_string(t)+" "+to_string(left_flank_length)+" "+to_string(insert_size)+" "+to_string(right_flank_length));
+			//int ret = write_bam_record(hap_cigar, "hap_"+hap_name, left_flank, 0, chrom, 3, new_hap_seq, outfile, header, t, "consensus");
+		//}
+		//out_lock.lock();
+		//output_map[hap_name] = chrom+"\t"+to_string(hap_ref_start)+"\t"+to_string(hap_ref_end)+"\t"+hap_name+"\t"+best_hap_sequence+"\t";
+		//out_lock.unlock();
 		supporting_counts[hap_name] = 0;
 		seq_map[hap_name] = new_hap_seq;
 		n_seqs++;
 		// Generate the mi for each alt hap and store params for re-alignment
-		mapping_params[hap_name] = make_pair(left_flank, insert_size);
+		//mapping_params[hap_name] = make_pair(pos+get<0>(haplotypes[h][0])-max_read_len, insert_size);
 	}
 	// Get and index an array of seqs
 	vector<mm_idx_t*> mi_vec;
@@ -1144,21 +1145,18 @@ std::unordered_map<std::string,std::unordered_map<std::string,std::vector<std::s
 			count_lock.lock();
 			align_time_count += duration3.count();
 			count_lock.unlock();
+			int max_score = 0;
+			string max_hap = "";
 			for(auto hap_it = hap_scores.begin(); hap_it != hap_scores.end(); hap_it++){
-				if(print){
-					cerr << it2->first << " " << hap_it->first << " " << hap_it->second << endl;
+				if(hap_it->second > max_score){
+					max_score = hap_it->second;
+					max_hap = hap_it->first;
 				}
-				if(hap_it->first == "ref"){
-					continue;
-				}
-				if(hap_it->second > hap_scores["ref"] ){
-					return_map[sample][it2->first].push_back(hap_it->first);
-					// Need to add read to hap output
-					//if(supporting_counts[hap_it->first] != 0){
-					//	output_map[hap_it->first] += ",";
-					//}
-					//supporting_counts[hap_it->first]++;
-					//output_map[hap_it->first] += sample+":"+it2->first;
+			}
+			if(max_hap != "ref" && max_hap != ""){
+				// Get all the inserts that fall under this hap and add to return map
+				for(size_t i =0; i < haplotypes[stoi(max_hap)].size(); i++){
+					return_map[sample][it2->first].push_back(get<6>(haplotypes[stoi(max_hap)][i]));
 				}
 			}
 		}
@@ -1228,7 +1226,7 @@ std::vector<std::tuple<int,int,int>> get_insert_position(std::string& cigar, int
 	return larger_inserts;
 }
 
-std::vector<std::tuple<int, int, std::string, int, int, int, std::string>> get_consensus_hap(const int start, const std::string& chrom, const std::string& ref_sequence, const std::unordered_map<std::string, std::vector<TsvRecord>>& inserts_per_sample, const int ref_window, std::unordered_map<std::string, std::unordered_map<std::string,std::string>>& read_sequences_per_sample, int gap_open, int gap_extend, int t, const int max_mem, const int high_mem, const int window, mm_tbuf_t *tbuf, const int max_insert_size, const int max_depth){
+std::unordered_map<int, std::vector<std::tuple<int, int, std::string, int, int, int, std::string>>> get_consensus_hap(const int start, const std::string& chrom, const std::string& ref_sequence, const std::unordered_map<std::string, std::vector<TsvRecord>>& inserts_per_sample, const int ref_window, std::unordered_map<std::string, std::unordered_map<std::string,std::string>>& read_sequences_per_sample, int gap_open, int gap_extend, int t, const int max_mem, const int high_mem, const int window, mm_tbuf_t *tbuf, const int max_insert_size, const int max_depth){
 	// Extract the read sequences of any insert supporting reads in this window.
 	// Compute a consensus for them, select the largest one
 	using namespace std;
@@ -1241,7 +1239,7 @@ std::vector<std::tuple<int, int, std::string, int, int, int, std::string>> get_c
 	long seq_start = 0;
 	string hap_name = "";
 	vector<tuple<int, int, string, int, int, string, string>> read_haps;
-	vector<tuple<int, int, string, int, int, int,string>> corrected_seqs;
+	unordered_map<int, vector<tuple<int, int, string, int, int, int,string>>> corrected_seqs;
 	unordered_map<string,int> hap_to_pos;
 	vector<string> haps_to_align;
 	unordered_map<string, int> total_read_inserts_in_window;
@@ -1284,6 +1282,7 @@ std::vector<std::tuple<int, int, std::string, int, int, int, std::string>> get_c
 		}
 	}
 	if(count > max_depth && max_depth > 0){
+		cerr << chrom << " " << start << " " << count << endl;
 		exit = true;
 	}
 	if(exit){
@@ -1299,7 +1298,7 @@ std::vector<std::tuple<int, int, std::string, int, int, int, std::string>> get_c
     if(print){
 		cerr << "Have " << n_seqs << endl;
 	}
-	string hap_sequence = "";
+	vector<string> hap_sequences;
 	if(n_seqs > 1){
 		/*
 		Legacy code for SPOA 
@@ -1326,6 +1325,7 @@ std::vector<std::tuple<int, int, std::string, int, int, int, std::string>> get_c
 			abpt->w = 50, abpt->k = 17; abpt->min_w = 500; // minimizer-based seeding and partition
 			//abpt->progressive_poa = 1;
 			abpt->disable_seeding = 0;
+			abpt->max_n_cons = 3;
 			abpoa_post_set_para(abpt);
 			// Get the lengths of each hap sequence and convert from ACGT to 0123
 			int *seq_lens = (int*)malloc(sizeof(int)*haps_to_align.size());
@@ -1354,15 +1354,17 @@ std::vector<std::tuple<int, int, std::string, int, int, int, std::string>> get_c
 				abpoa_free_para(abpt);
 		    } else {
 			    if(ab->abc->n_cons > 0){
-			    	string tmp(ab->abc->cons_len[0], 'N');
-			    	int i = 0;
-			        for (size_t j = 0; j < ab->abc->cons_len[0]; ++j){
-			            tmp[i] = (char)_char256_table[ab->abc->cons_base[0][j]];
-			            //cout << (char)_char256_table[ab->abc->cons_base[0][j]];
-			            i++;
+			    	for (size_t k = 0; k < ab->abc->n_cons; ++k) {
+			    		string tmp(ab->abc->cons_len[k], 'N');
+			    		int i = 0;
+			        	for (size_t j = 0; j < ab->abc->cons_len[k]; ++j){
+			            	tmp[i] = (char)_char256_table[ab->abc->cons_base[k][j]];
+			            	//cot << (char)_char256_table[ab->abc->cons_base[0][j]];
+			            	i++;
+			        	}
+			        	//cout << endl;
+			        	hap_sequences.push_back(tmp);
 			        }
-			        //cout << endl;
-			        hap_sequence = tmp;
 			    }
 			    for (size_t i = 0; i < haps_to_align.size(); ++i){
 			    	free(bseqs[i]);
@@ -1512,7 +1514,7 @@ std::vector<std::tuple<int, int, std::string, int, int, int, std::string>> get_c
 				abpoa_free(ab);
 				abpoa_free_para(abpt);
 			}
-			hap_sequence = "";
+			string hap_sequence = "";
 			for(size_t k = 0; k < max_target; k++){
 				//cout << "C " << k << endl;
 				if(corrected_sub_seqs[k*500] == ""){
@@ -1523,12 +1525,15 @@ std::vector<std::tuple<int, int, std::string, int, int, int, std::string>> get_c
 					hap_sequence += corrected_sub_seqs[k*500];
 				}
 			}
+			hap_sequences.push_back(hap_sequence);
 		}
 	} else {
 		// Only have one sequence
+		string hap_sequence;
 		for(size_t i = 0; i < read_haps.size(); i++){
 			hap_sequence = get<6>(read_haps[i]);
 		}
+		hap_sequences.push_back(hap_sequence);
 	}
 	// Align hap_seq to ref with minimap2 and parse the CIGAR to get the position of the insert on the hap and ref
 	// Extract the ref pos as the position where the corrected hap seq should go and add it to the ref there and return
@@ -1545,50 +1550,52 @@ std::vector<std::tuple<int, int, std::string, int, int, int, std::string>> get_c
 	mm_mapopt_update(&mopt, mi); // this sets the maximum minimizer occurrence; TODO: set a better default in mm_mapopt_init()!
 	mopt.cap_kalloc = 100000000;
 	mm_set_opt("map-ont", &iopt, &mopt);
-	AlignmentResult complete_result = align_minimap(hap_sequence, mi, &mopt, "", "", "", true, tbuf, print);
-	vector<tuple<int,int,int>> positions_on_ref = get_insert_position(complete_result.cigar, complete_result.read_start, complete_result.read_end, complete_result.startLocation, complete_result.endLocation, complete_result.orientation, hap_sequence, print, seq_start - window_to_use);
-	if(positions_on_ref.size() == 0){
-		// More than one insert detected when we compute the concensus
-		//cout << t << " " << positions_on_ref.size() << endl;
-		//if(chrom+":"+to_string(start) == "chr1:933150"){
-		//	ofstream MyFile("test_con.fa");
-		//	MyFile << ">hap_seq\n" << hap_sequence << "\n";
-		//	MyFile.close();
-		//}
-		if(print){
-			cerr << "No inserts on ref " << endl;
-			ofstream MyFile("test_con.fa");
-			MyFile << ">hap_seq\n" << hap_sequence << "\n";
-			MyFile.close();
-		}
-		return corrected_seqs;
-	}
-	// For each insert over 100bp create an alt hap for it
-	for(size_t i = 0; i < positions_on_ref.size(); i++){
-		tuple<int,int,int> concensus_pos = positions_on_ref[i];
-		int insert_start = (seq_start - window_to_use + get<2>(concensus_pos)) - ref_start+1;
-		int insert_start_pos_on_hap = get<0>(concensus_pos);
-		int insert_length = get<1>(concensus_pos);
-		if(insert_start_pos_on_hap < 0 || insert_length < 0 ){
+	for(size_t h = 0; h < hap_sequences.size(); h++){
+		AlignmentResult complete_result = align_minimap(hap_sequences[h], mi, &mopt, "", "", "", true, tbuf, print);
+		vector<tuple<int,int,int>> positions_on_ref = get_insert_position(complete_result.cigar, complete_result.read_start, complete_result.read_end, complete_result.startLocation, complete_result.endLocation, complete_result.orientation, hap_sequences[h], print, seq_start - window_to_use);
+		if(positions_on_ref.size() == 0){
+			// More than one insert detected when we compute the concensus
+			//cout << t << " " << positions_on_ref.size() << endl;
+			//if(chrom+"+"+to_string(start) == "chr1:933150"){
+			//	ofstream MyFile("test_con.fa");
+			//	MyFile << ">hap_seq\n" << hap_sequences[h] << "\n";
+			//	MyFile.close();
+			//}
 			if(print){
-				cerr << "start pos or length < 0" << endl;
+				cerr << "No inserts on ref " << endl;
+				ofstream MyFile("test_con.fa");
+				MyFile << ">hap_seq\n" << hap_sequences[h] << "\n";
+				MyFile.close();
 			}
 			continue;
 		}
-		if(complete_result.orientation == '-'){
-			hap_sequence = dna_reverse_complement(hap_sequence);
-		}
-		string insert_seq = hap_sequence.substr(insert_start_pos_on_hap, insert_length);
-		if(print){
-			cerr << "AAAA " << insert_start << "\t" << insert_seq.length() << "\t" << seq_start - window_to_use + get<2>(concensus_pos) << "\t" << window_to_use << endl;
-			cerr << complete_result.cigar << endl;
-			ofstream MyFile("test_con.fa");
-			MyFile << ">hap_seq\n" << hap_sequence << "\n";
-			MyFile.close();
-		}
-		corrected_seqs.push_back(make_tuple(insert_start, insert_seq.length(), insert_seq, seq_start - window_to_use + get<2>(concensus_pos), seq_start - window_to_use + get<2>(concensus_pos) + 1, window_to_use, "consensus_"+hap_name));
-		if(print){
-			cerr << "Adding insert to consensus haps " << seq_start - window_to_use + get<2>(concensus_pos) << endl;
+		// For each insert over 100bp create an alt hap for it
+		for(size_t i = 0; i < positions_on_ref.size(); i++){
+			tuple<int,int,int> concensus_pos = positions_on_ref[i];
+			int insert_start = (seq_start - window_to_use + get<2>(concensus_pos)) - ref_start+1;
+			int insert_start_pos_on_hap = get<0>(concensus_pos);
+			int insert_length = get<1>(concensus_pos);
+			if(insert_start_pos_on_hap < 0 || insert_length < 0 ){
+				if(print){
+					cerr << "start pos or length < 0" << endl;
+				}
+				continue;
+			}
+			if(complete_result.orientation == '-'){
+				hap_sequences[h] = dna_reverse_complement(hap_sequences[h]);
+			}
+			string insert_seq = hap_sequences[h].substr(insert_start_pos_on_hap, insert_length);
+			if(print){
+				cerr << "AAAA " << insert_start << "\t" << insert_seq.length() << "\t" << seq_start - window_to_use + get<2>(concensus_pos) << "\t" << window_to_use << endl;
+				cerr << complete_result.cigar << endl;
+				ofstream MyFile("test_con.fa");
+				MyFile << ">hap_seq\n" << hap_sequences[h] << "\n";
+				MyFile.close();
+			}
+			corrected_seqs[h].push_back(make_tuple(insert_start, insert_seq.length(), insert_seq, seq_start - window_to_use + get<2>(concensus_pos), seq_start - window_to_use + get<2>(concensus_pos) + 1, window_to_use, "consensus_"+hap_name+"_"+to_string(h)+"_"+to_string(i)));
+			if(print){
+				cerr << "Adding insert to consensus haps " << seq_start - window_to_use + get<2>(concensus_pos) << endl;
+			}
 		}
 	}
 	return corrected_seqs;
@@ -1612,14 +1619,14 @@ void realign_reads(const int t, const std::unordered_map<std::string, faidx_t*>&
 		string read_name = get<1>(read_to_project);
 		unordered_map<string, vector<pair<int,vector<string>>>> positions_for_chrom;
 		int total_positions = 0;
-		unordered_map<string, vector<string>> val = alt_hap_per_read_per_sample[sample+":"+read_name];
+		unordered_map<string, vector<string>> val = alt_hap_per_read_per_sample[sample+"+"+read_name];
 		for(auto it = val.begin(); it != val.end(); it++){
 			string chrom; 
 			string position;
 			// -- Use a data struct to store as seperate fields. 
 			stringstream  combined(it->first);
-			getline(combined, chrom, ':');
-			getline(combined, position, ':');
+			getline(combined, chrom, '+');
+			getline(combined, position, '+');
 			int pos = stoi(position);
 			vector<string> alt_hap_names = it->second;
 			positions_for_chrom[chrom].push_back(make_pair(pos, alt_hap_names));
@@ -1641,7 +1648,7 @@ void realign_reads(const int t, const std::unordered_map<std::string, faidx_t*>&
 				int pos = insert_positions[i].first;
 				for(size_t j = 0; j < insert_positions[i].second.size(); j++){
 					string hap_name = insert_positions[i].second[j];
-					tuple<int, int, string, int, int, int, string> hap_tuple = consensus_tuples_per_pos[it->first+":"+to_string(pos)][hap_name];
+					tuple<int, int, string, int, int, int, string> hap_tuple = consensus_tuples_per_pos[it->first+"+"+to_string(pos)][hap_name];
 					int hap_window = get<5>(hap_tuple);
 					if(hap_window > window_to_use){
 						window_to_use = hap_window;
@@ -1681,7 +1688,7 @@ void realign_reads(const int t, const std::unordered_map<std::string, faidx_t*>&
 				for(size_t j = 0; j < insert_positions[i].second.size(); j++){
 					string hap_name = insert_positions[i].second[j];
 					hap_names.push_back(hap_name);
-					tuple<int, int, string, int, int, int, string> hap_tuple = consensus_tuples_per_pos[it->first+":"+to_string(pos)][hap_name];
+					tuple<int, int, string, int, int, int, string> hap_tuple = consensus_tuples_per_pos[it->first+"+"+to_string(pos)][hap_name];
 					int hap_position = (pos + get<0>(hap_tuple)) - (min_pos - added_bases);
 					alt_hap_seq = alt_hap_seq.substr(0, hap_position)+get<2>(hap_tuple)+alt_hap_seq.substr(hap_position);
 					added_bases += get<1>(hap_tuple);
@@ -1753,34 +1760,36 @@ void haps_only_chrom(const int t, const std::unordered_map<std::string, std::map
 
 		// -- Make a parameters struct
 		// -- Return a struct 
-		vector<tuple<int, int, string, int, int, int, string>> consensus_tuples = get_consensus_hap(pos, chrom, ref_sequence, inserts_per_sample, max_read_len, read_sequences_per_sample, gap_open, gap_extend, t, max_mem, high_mem, window, tbuf, max_insert_size, depth_filter);
-		for(size_t i = 0; i < consensus_tuples.size(); i++){
-			tuple<int, int, string, int, int, int, string> hap_tuple = consensus_tuples[i];
-			int window_to_use = get<5>(hap_tuple);
-			if(window_to_use < 10000){
-				window_to_use = 10000;
+		unordered_map<int, vector<tuple<int, int, string, int, int, int, string>>> consensus_tuples = get_consensus_hap(pos, chrom, ref_sequence, inserts_per_sample, max_read_len, read_sequences_per_sample, gap_open, gap_extend, t, max_mem, high_mem, window, tbuf, max_insert_size, depth_filter);
+		for(size_t h = 0; h < consensus_tuples.size(); h++){
+			for(size_t i = 0; i < consensus_tuples[h].size(); i++){
+				tuple<int, int, string, int, int, int, string> hap_tuple = consensus_tuples[h][i];
+				int window_to_use = get<5>(hap_tuple);
+				if(window_to_use < 10000){
+					window_to_use = 10000;
+				}
+				int min_pos = pos-window_to_use;
+				if(min_pos < 0){
+					min_pos = 0;
+				}
+				int l = 2*window_to_use;
+				if(min_pos + l > ref_sequence.length()){
+					l = ref_sequence.length() - min_pos - 1;
+				}
+				string alt_hap_seq = ref_sequence.substr(min_pos, l);
+				int hap_position = (pos + get<0>(hap_tuple)) - min_pos;
+				if(hap_position < 0 || hap_position > alt_hap_seq.length()){
+					continue;
+				}
+				alt_hap_seq = alt_hap_seq.substr(0, hap_position)+get<2>(hap_tuple)+alt_hap_seq.substr(hap_position);
+				ofstream output_file;
+				tsv_lock.lock();
+				output_file.open(output_fasta, ios_base::app);
+				output_file << ">" << get<6>(hap_tuple) << "_" << to_string(pos) << "\n" << alt_hap_seq << "\n";
+				output_file.close();
+				//cout << get<6>(hap_tuple) << endl;
+				tsv_lock.unlock();
 			}
-			int min_pos = pos-window_to_use;
-			if(min_pos < 0){
-				min_pos = 0;
-			}
-			int l = 2*window_to_use;
-			if(min_pos + l > ref_sequence.length()){
-				l = ref_sequence.length() - min_pos - 1;
-			}
-			string alt_hap_seq = ref_sequence.substr(min_pos, l);
-			int hap_position = (pos + get<0>(hap_tuple)) - min_pos;
-			if(hap_position < 0 || hap_position > alt_hap_seq.length()){
-				continue;
-			}
-			alt_hap_seq = alt_hap_seq.substr(0, hap_position)+get<2>(hap_tuple)+alt_hap_seq.substr(hap_position);
-			ofstream output_file;
-			tsv_lock.lock();
-			output_file.open(output_fasta, ios_base::app);
-			output_file << ">" << get<6>(hap_tuple) << "_" << to_string(pos) << "\n" << alt_hap_seq << "\n";
-			output_file.close();
-			//cout << get<6>(hap_tuple) << endl;
-			tsv_lock.unlock();
 		}
 		//Update global list of reads per sample to map each read to its respective alternative haplotype
 		for(size_t j = 0; j < reads_in_window.size(); j++){
@@ -1834,7 +1843,7 @@ void realign_chrom(const int t, const std::unordered_map<std::string, std::map<i
 		// -- Make a parameters struct
 		// -- Return a struct 
 		auto start1 = chrono::high_resolution_clock::now();
-		vector<tuple<int, int, string, int, int, int, string>> consensus_tuples = get_consensus_hap(pos, chrom, ref_sequence, inserts_per_sample, max_read_len, read_sequences_per_sample, gap_open, gap_extend, t, max_mem, high_mem, window, tbuf, max_insert_size, depth_filter);
+		unordered_map<int, vector<tuple<int, int, string, int, int, int, string>>> consensus_tuples = get_consensus_hap(pos, chrom, ref_sequence, inserts_per_sample, max_read_len, read_sequences_per_sample, gap_open, gap_extend, t, max_mem, high_mem, window, tbuf, max_insert_size, depth_filter);
 		// Get a set of alternative haplotypes for the window
 		//if(consensus_tuples.size() == 0){
 			//cout << t << " Getting hap_set " << endl;
@@ -1848,7 +1857,7 @@ void realign_chrom(const int t, const std::unordered_map<std::string, std::map<i
 		count_lock.lock();
 		hap_time_count += duration1.count();
 		count_lock.unlock();
-		//print_debug(to_string(t)+" "+chrom+":"+to_string(pos)+" "+to_string(reads_in_window.size())+" "+to_string(max_read_len)+" "+to_string(window)+" "+to_string(consensus_tuples.size()));
+		//print_debug(to_string(t)+" "+chrom+"+"+to_string(pos)+" "+to_string(reads_in_window.size())+" "+to_string(max_read_len)+" "+to_string(window)+" "+to_string(consensus_tuples.size()));
 		unordered_map<string,unordered_map<string, vector<string>>> alt_hap_map;
 		if(consensus_tuples.size() > 0){
 			alt_hap_map = align_all_reads(read_sequences_per_sample, ref_sequence, consensus_tuples, gap_open, gap_extend, min_mapq, output, chrom, pos, max_read_len, outfile, header, seen, alignments_per_read, t, max_mem, include_haplotypes, tsv_output, tbuf);
@@ -1857,11 +1866,13 @@ void realign_chrom(const int t, const std::unordered_map<std::string, std::map<i
 		hap_lock.lock();
 		for(auto it = alt_hap_map.begin(); it !=alt_hap_map.end(); it++){
 			for(auto it2 = it->second.begin(); it2 != it->second.end(); it2++){
-				alt_hap_per_read_per_sample[it->first+":"+it2->first][chrom+":"+to_string(pos)] = it2->second;
+				alt_hap_per_read_per_sample[it->first+"+"+it2->first][chrom+"+"+to_string(pos)] = it2->second;
 			}
 		}
-		for(size_t i = 0; i < consensus_tuples.size(); i++){
-			consensus_tuples_per_pos[chrom+":"+to_string(pos)][get<6>(consensus_tuples[i])] = consensus_tuples[i];
+		for(size_t h = 0; h < consensus_tuples.size(); h++){
+			for(size_t i = 0; i < consensus_tuples[h].size(); i++){
+				consensus_tuples_per_pos[chrom+"+"+to_string(pos)][get<6>(consensus_tuples[h][i])] = consensus_tuples[h][i];
+			}
 		}
 		hap_lock.unlock();
 		for(size_t j = 0; j < reads_in_window.size(); j++){
@@ -2022,13 +2033,13 @@ void ReAlign::realign_all(const std::string& bam_list, const std::string& tsv_li
 		// Setup a map of position per thread
 		set<pair<int,int>> positions_for_chrom = positions.at(chrom);
 		//cout << chrom << " " << positions_for_chrom.size() << endl;
-		ofstream output;
-		output.open("all_positions.txt");
+		//ofstream output;
+		//output.open("all_positions.txt");
 		for(auto pos = positions_for_chrom.begin(); pos != positions_for_chrom.end(); pos++){
 			positions_for_threads.push(make_tuple(chrom,pos->first,pos->second));
-			output << chrom << ":" << pos->first << "\n";
+		//	output << chrom << "+" << pos->first << "\n";
 		}
-		output.close();
+		//output.close();
 		print_debug("Identify and Align reads to Alternative Haplotypes");
 		vector<thread> thread_pool;
 		for (int i = 0; i < threads; i++) {
@@ -2043,8 +2054,8 @@ void ReAlign::realign_all(const std::string& bam_list, const std::string& tsv_li
 			string sample; 
 			string read;
 			stringstream  combined(it->first);
-			getline(combined, sample, ':');
-			getline(combined, read, ':');
+			getline(combined, sample, '+');
+			getline(combined, read, '+');
 			alt_hap_queue.push(make_pair(sample, read));
 		}
 		vector<thread> thread_pool2;

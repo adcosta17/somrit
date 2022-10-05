@@ -494,14 +494,12 @@ class myThread (threading.Thread):
             new_records = merge_records(records, self.header, self.reference_gap_minimum, self.min_mapq, self.min_detected_inclusion_length, self.in_fq, self.f_lock)
             for c in new_records:
                 inserts, merged = get_tsv_record(new_records[c], self.reference_gap_minimum, self.min_detected_inclusion_length, self.min_mapq, self.min_insertion_length, self.min_flank_size)
+                self.t_lock.acquire()
                 for c in inserts:
-                    self.t_lock.acquire()
                     self.out_tsv.write(inserts[c]+"\n")
-                    self.t_lock.release()
                 if merged:
-                    self.t_lock.acquire()
                     self.out_merged.write(read_id+"\n")
-                    self.t_lock.release()
+                self.t_lock.release()
 
 
 def extract_candidate_insertions(bam, output_tsv, output_merged, min_insertion_length, min_detected_inclusion_length, min_flank_size, min_mapq, reference_gap_minimum, fastq_file, threads):

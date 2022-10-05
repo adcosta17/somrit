@@ -1,7 +1,7 @@
 # Sub directories containing source code, except for the main programs
 SUBDIRS :=. 
 
-LIBS = -lz -lm -llzma -lbz2 -lpthread -lcurl -lssl -lcrypto -lgcov -ldeflate -labpoa -lminimap2 -lz -lhts
+LIBS = -lz -lm -llzma -lbz2 -lpthread -lcurl -lssl -lcrypto -lgcov -labpoa -lminimap2 -lz -lhts
 
 HTS?=install
 
