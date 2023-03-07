@@ -427,7 +427,7 @@ def get_tsv_record(record, max_ref_gap_at_candidate, min_detected_inclusion_leng
         ref_end = insert[2]+1+record.ref_start
         read_start = insert[0]
         read_end = insert[0]+insert[1]
-        if record.orientation == '-' and insertion_sequence != "":
+        if record.orientation == '-' and read_seq is not None:
             tmp = len(read_seq) - read_start
             read_start = len(read_seq) - read_end
             read_end = tmp
