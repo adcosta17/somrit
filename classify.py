@@ -51,12 +51,7 @@ def get_consensus(result_dict):
     else:
         return (max_annotation, 0)
 
-def classify_insertions(tsv_list, bam_list, control_sequences_file, output_tsv, fastq_list, realign_tsv, samples):
-    # First combine insertion sets together and then look for softclip support before classifying the insertion sequence
-    # Begin by reading in realign_tsv, and storing positions/reads
-    # Next parse each tsv in tsv_list. If read was realigned, skip it. Otherwise add to set
-    # Then for each position, parse the bam_list to look for reads that may support an insert here with softclip
-    # Add those Softclip supporting reads to the row
+def classify_insertions(tsv_list, control_sequences_file, output_tsv, fastq_list, realign_tsv, samples):
     seen = defaultdict(IntervalTree)
     realigned_reads = defaultdict(int)
     if realign_tsv is not None:

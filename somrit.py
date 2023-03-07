@@ -28,10 +28,13 @@ def merge_samples(args, bams, tsvs):
     samples = {}
     sample_input_bam = {}
     sample_output_bam = {}
+    sample_output_tsv = {}
     seen = {}
     input_bams = args.bam_list.split(',')
     output_bams = args.output_bam_list.split(',')
+    output_tsvs = args.output_tsv_list.split(',')
     assert len(input_bams) == len(output_bams), "The length of the input bam list and output bam list should match, if the output bam list is provided"
+    assert len(input_bams) == len(output_tsvs), "The length of the input bam list and output tsv list should match, if the output tsv list is provided"
     assert len(input_bams) > 0, "Must have at least one input bam"
     # Setup the naming dictionaries so we can link input and output bams to the same sample
     filedata = {}
@@ -43,6 +46,7 @@ def merge_samples(args, bams, tsvs):
         samples[sample] = defaultdict(int)
         sample_input_bam[sample] = input_bams[i]
         sample_output_bam[sample] = output_bams[i]
+        sample_output_tsv[sample] = output_tsvs[i]
         filedata[sample] = pysam.AlignmentFile(output_bams[i], "wb", header=header)
         seen[sample] = {}
     print(1)
@@ -73,19 +77,24 @@ def merge_samples(args, bams, tsvs):
     for file in filedata.values():
         file.close()
     print("Done Bams")
-    #with open(args.output_dir+"/"+args.tsv_prefix+".tsv", "w") as myfile:
-    #    for tsv in tsvs:
-    #        with open(tsv, 'r') as in_tsv:
-    #            count = 0
-    #            for line in in_tsv:
-    #                if count == 0:
-    #                    if len(bams) == 0:
-    #                        myfile.write(line.strip()+"\n")
-    #                    count += 1
-    #                    continue
-    #                myfile.write(line)
-    #for tsv in tsvs:
-    #    os.remove(tsv)
+    for sample in sample_output_tsv:
+        with open(sample_output_tsv[sample], "w") as myfile:
+            out_count = 0
+            for tsv in tsvs:
+                with open(tsv, 'r') as in_tsv:
+                    count = 0
+                    for line in in_tsv:
+                        if out_count == 0 and count == 0:
+                            myfile.write(line.strip()+"\n")
+                            out_count += 1
+                            count += 1
+                            continue
+                        row = line.strip().split('\t')
+                        if sample in row[5]:
+                            # Have a supporting read from this sample. Put in the tsv
+                            myfile.write(line)
+    for tsv in tsvs:
+        os.remove(tsv)
 
 
 def merge_all(args, bams, tsvs):
@@ -133,11 +142,11 @@ class ReAlign(object):
         self.obj = lib.ReAlign_new()
   
     # define method
-    def realign_all(self, bam_list, tsv_list, fastq_list, samples_list, output_tsv, output_bam, cluster_window, reference_genome, gap_open, gap_extend, min_mapq, chr_list, pass_only, depth_filter, threads, max_mem, high_mem, include_haps, max_window_size, max_insert_size):
-        lib.ReAlign_realign_all(self.obj, bam_list, tsv_list, fastq_list, samples_list, output_tsv, output_bam, cluster_window, reference_genome, gap_open, gap_extend, min_mapq, chr_list, pass_only, depth_filter, threads, max_mem, high_mem, include_haps, max_window_size, max_insert_size)
+    def realign_all(self, bam_list, tsv_list, fastq_list, samples_list, output_tsv, output_bam, cluster_window, reference_genome, gap_open, gap_extend, min_mapq, chr_list, pass_only, depth_filter, threads, max_mem, high_mem, include_haps, max_window_size, max_insert_size, max_con):
+        lib.ReAlign_realign_all(self.obj, bam_list, tsv_list, fastq_list, samples_list, output_tsv, output_bam, cluster_window, reference_genome, gap_open, gap_extend, min_mapq, chr_list, pass_only, depth_filter, threads, max_mem, high_mem, include_haps, max_window_size, max_insert_size, max_con)
 
-    def haps_only(self, bam_list, tsv_list, fastq_list, samples_list, output_fa, cluster_window, reference_genome, gap_open, gap_extend, min_mapq, chr_list, pass_only, depth_filter, threads, max_mem, high_mem, include_haps, max_window_size, max_insert_size):
-        lib.ReAlign_haps_only(self.obj, bam_list, tsv_list, fastq_list, samples_list, output_fa, cluster_window, reference_genome, gap_open, gap_extend, min_mapq, chr_list, pass_only, depth_filter, threads, max_mem, high_mem, include_haps, max_window_size, max_insert_size)
+    def haps_only(self, bam_list, tsv_list, fastq_list, samples_list, output_fa, cluster_window, reference_genome, gap_open, gap_extend, min_mapq, chr_list, pass_only, depth_filter, threads, max_mem, high_mem, include_haps, max_window_size, max_insert_size, max_con):
+        lib.ReAlign_haps_only(self.obj, bam_list, tsv_list, fastq_list, samples_list, output_fa, cluster_window, reference_genome, gap_open, gap_extend, min_mapq, chr_list, pass_only, depth_filter, threads, max_mem, high_mem, include_haps, max_window_size, max_insert_size, max_con)
 
 parser = argparse.ArgumentParser(description="somrit - Somatic Retrotransposon Insertion Toolkit")
 subparsers = parser.add_subparsers(help='subprograms')
@@ -154,6 +163,7 @@ extract_parser.add_argument('--min-insertion-length', type=int, default=100)
 extract_parser.add_argument('--min-detected-inclusion-length', type=int, default=50)
 extract_parser.add_argument('--min-flank-size', required=False, default=100)
 extract_parser.add_argument('--min-mapq', required=False, type=int, default=20)
+extract_parser.add_argument('--min-read-len', required=False, type=int, default=7000)
 extract_parser.add_argument('--reference-gap-minimum', type=int, default=100)
 extract_parser.add_argument('--fastq-file', type=str, required=True)
 extract_parser.add_argument('--threads', type=int, required=False, default=1)
@@ -170,6 +180,7 @@ realign_parser.add_argument('--gap-open', type=int, required=False, default=11)
 realign_parser.add_argument('--gap-extend', type=int, required=False, default=1)
 realign_parser.add_argument('--threads', type=int, required=False, default=1)
 realign_parser.add_argument('--min-mapq', type=int, required=False, default=20)
+realign_parser.add_argument('--max-haps', type=int, required=False, default=3)
 realign_parser.add_argument('--max-mem', type=int, required=False, default=5000000000)
 realign_parser.add_argument('--chromosome-list', type=str, required=False, default="all_main")
 realign_parser.add_argument("--filter-pass", type=str2bool, nargs='?',const=True, default=False)
@@ -185,11 +196,12 @@ realign_parser.add_argument('--max-insert-size', type=int, required=False, defau
 merge_parser.add_argument('--bam-prefix', type=str, required=True)
 merge_parser.add_argument('--output-dir', type=str, required=True)
 merge_parser.add_argument('--output-bam-list', type=str, required=False)
+merge_parser.add_argument('--output-tsv-list', type=str, required=False)
 merge_parser.add_argument('--tsv-prefix', type=str, required=True)
 merge_parser.add_argument('--chromosome-list', type=str, required=False, default="all_main")
 merge_parser.add_argument('--bam-list', type=str, required=True)
 
-classify_parser.add_argument('--bam-list', type=str, required=True)
+#classify_parser.add_argument('--bam-list', type=str, required=True)
 classify_parser.add_argument('--sample-list', type=str, required=True)
 classify_parser.add_argument('--realign-tsv', type=str, required=False)
 classify_parser.add_argument('--tsv-list', type=str, required=True)
@@ -218,7 +230,7 @@ if len(sys.argv) < 2:
 elif sys.argv[1] == "extract":
     print("Extracting Insertions")
     from extract import extract_candidate_insertions
-    extract_candidate_insertions(args.bam, args.output_tsv, args.output_merged, args.min_insertion_length, args.min_detected_inclusion_length, args.min_flank_size, args.min_mapq, args.reference_gap_minimum, args.fastq_file, args.threads)
+    extract_candidate_insertions(args.bam, args.output_tsv, args.output_merged, args.min_insertion_length, args.min_detected_inclusion_length, args.min_flank_size, args.min_read_len, args.min_mapq, args.reference_gap_minimum, args.fastq_file, args.threads)
 elif sys.argv[1] == "realign":
     print("Realigning Insertions")
     #from src.realign import realign_candidate_insertions
@@ -256,22 +268,24 @@ elif sys.argv[1] == "realign":
         high_mem = 1
     if os.path.isfile(args.output_dir+"/"+args.bam_prefix+".bam"):
         # ReAlignment already done here
+        print("Desired Output File already exists")
         exit(0)
     # Use the C++ library for realign
     if args.only_haps:
         # Get just a fasta of alternative haplotypes based on insertions. Don't care about re-aligning reads to the haplotypes
         for chrom in chr_to_use.split(','):
             r = ReAlign()
-            out_fasta = args.output_dir+"/"+args.tsv_prefix+"."+chrom+".fa"
-            r.haps_only(c_char_p(args.bam_list.encode('utf-8')), c_char_p(args.tsv_list.encode('utf-8')), c_char_p(args.fastq_list.encode('utf-8')), c_char_p(','.join(samples).encode('utf-8')), c_char_p(out_fasta.encode('utf-8')), c_int(int(args.cluster_window)), c_char_p(args.reference_genome.encode('utf-8')), c_int(int(args.gap_open)), c_int(int(args.gap_extend)), c_int(int(args.min_mapq)), c_char_p(chrom.encode('utf-8')), c_int(pass_only), c_int(depth_filter), c_int(int(args.threads)), c_int(int(args.max_mem)), c_int(high_mem), c_int(include_haps), c_int(args.max_window_size), c_int(args.max_insert_size))
-            with open(args.output_dir+"/"+args.tsv_prefix+".fa", "a") as myfile:
-                with open(out_fasta, 'r') as in_fa:
-                    for line in in_fa:
-                        myfile.write(line)
-            os.remove(out_fasta)
+            out_fasta = args.output_dir+"/"+chrom+"."+args.tsv_prefix+".tsv"
+            r.haps_only(c_char_p(args.bam_list.encode('utf-8')), c_char_p(args.tsv_list.encode('utf-8')), c_char_p(args.fastq_list.encode('utf-8')), c_char_p(','.join(samples).encode('utf-8')), c_char_p(out_fasta.encode('utf-8')), c_int(int(args.cluster_window)), c_char_p(args.reference_genome.encode('utf-8')), c_int(int(args.gap_open)), c_int(int(args.gap_extend)), c_int(int(args.min_mapq)), c_char_p(chrom.encode('utf-8')), c_int(pass_only), c_int(depth_filter), c_int(int(args.threads)), c_int(int(args.max_mem)), c_int(high_mem), c_int(include_haps), c_int(args.max_window_size), c_int(args.max_insert_size), c_int(args.max_haps))
+            #with open(args.output_dir+"/"+args.tsv_prefix+".tsv", "a") as myfile:
+            #    with open(out_fasta, 'r') as in_fa:
+            #        for line in in_fa:
+            #            myfile.write(line)
+            #os.remove(out_fasta)
     elif args.only_realign:
         # only do the re-alignment step, don't merge
         for chrom in chr_to_use.split(','):
+            print(chrom)
             r = ReAlign()
             out_tsv = args.output_dir+"/"+chrom+"."+args.tsv_prefix+".tsv"
             out_sam = args.output_dir+"/"+chrom+"."+args.bam_prefix+".sam"
@@ -280,7 +294,7 @@ elif sys.argv[1] == "realign":
                 tsvs.append(out_tsv)
                 print("found "+chrom)
                 continue
-            r.realign_all(c_char_p(args.bam_list.encode('utf-8')), c_char_p(args.tsv_list.encode('utf-8')), c_char_p(args.fastq_list.encode('utf-8')), c_char_p(','.join(samples).encode('utf-8')), c_char_p(out_tsv.encode('utf-8')), c_char_p(out_sam.encode('utf-8')), c_int(int(args.cluster_window)), c_char_p(args.reference_genome.encode('utf-8')), c_int(int(args.gap_open)), c_int(int(args.gap_extend)), c_int(int(args.min_mapq)), c_char_p(chrom.encode('utf-8')), c_int(pass_only), c_int(depth_filter), c_int(int(args.threads)), c_int(int(args.max_mem)), c_int(high_mem), c_int(include_haps), c_int(args.max_window_size), c_int(args.max_insert_size))
+            r.realign_all(c_char_p(args.bam_list.encode('utf-8')), c_char_p(args.tsv_list.encode('utf-8')), c_char_p(args.fastq_list.encode('utf-8')), c_char_p(','.join(samples).encode('utf-8')), c_char_p(out_tsv.encode('utf-8')), c_char_p(out_sam.encode('utf-8')), c_int(int(args.cluster_window)), c_char_p(args.reference_genome.encode('utf-8')), c_int(int(args.gap_open)), c_int(int(args.gap_extend)), c_int(int(args.min_mapq)), c_char_p(chrom.encode('utf-8')), c_int(pass_only), c_int(depth_filter), c_int(int(args.threads)), c_int(int(args.max_mem)), c_int(high_mem), c_int(include_haps), c_int(args.max_window_size), c_int(args.max_insert_size), c_int(args.max_haps))
             pysam.sort("-o", args.output_dir+"/"+chrom+"."+args.bam_prefix+".bam", args.output_dir+"/"+chrom+"."+args.bam_prefix+".sam")
             os.remove(out_sam)
     else:
@@ -296,7 +310,7 @@ elif sys.argv[1] == "realign":
                 tsvs.append(out_tsv)
                 print("found "+chrom)
                 continue
-            r.realign_all(c_char_p(args.bam_list.encode('utf-8')), c_char_p(args.tsv_list.encode('utf-8')), c_char_p(args.fastq_list.encode('utf-8')), c_char_p(','.join(samples).encode('utf-8')), c_char_p(out_tsv.encode('utf-8')), c_char_p(out_sam.encode('utf-8')), c_int(int(args.cluster_window)), c_char_p(args.reference_genome.encode('utf-8')), c_int(int(args.gap_open)), c_int(int(args.gap_extend)), c_int(int(args.min_mapq)), c_char_p(chrom.encode('utf-8')), c_int(pass_only), c_int(depth_filter), c_int(int(args.threads)), c_int(int(args.max_mem)), c_int(high_mem), c_int(include_haps), c_int(args.max_window_size), c_int(args.max_insert_size))
+            r.realign_all(c_char_p(args.bam_list.encode('utf-8')), c_char_p(args.tsv_list.encode('utf-8')), c_char_p(args.fastq_list.encode('utf-8')), c_char_p(','.join(samples).encode('utf-8')), c_char_p(out_tsv.encode('utf-8')), c_char_p(out_sam.encode('utf-8')), c_int(int(args.cluster_window)), c_char_p(args.reference_genome.encode('utf-8')), c_int(int(args.gap_open)), c_int(int(args.gap_extend)), c_int(int(args.min_mapq)), c_char_p(chrom.encode('utf-8')), c_int(pass_only), c_int(depth_filter), c_int(int(args.threads)), c_int(int(args.max_mem)), c_int(high_mem), c_int(include_haps), c_int(args.max_window_size), c_int(args.max_insert_size), c_int(args.max_haps))
             pysam.sort("-o", args.output_dir+"/"+chrom+"."+args.bam_prefix+".bam", args.output_dir+"/"+chrom+"."+args.bam_prefix+".sam")
             bams.append(args.output_dir+"/"+chrom+"."+args.bam_prefix+".bam")
             os.remove(out_sam)
@@ -330,7 +344,7 @@ elif sys.argv[1] == "classify":
     if args.realign_tsv:
         rt = args.realign_tsv
     samples = args.sample_list.split(',')
-    classify_insertions(args.tsv_list, args.bam_list, args.annotation_file, args.output_tsv, args.fastq_list, rt, samples)
+    classify_insertions(args.tsv_list, args.annotation_file, args.output_tsv, args.fastq_list, rt, samples)
 elif sys.argv[1] == "filter":
     print("Filtering Insertions")
     from filter import filter_insertions

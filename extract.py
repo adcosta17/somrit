@@ -11,7 +11,7 @@ import threading
 import time
 import queue
 
-Record = namedtuple('Record', ['query_name', 'orientation', 'ref_name', 'ref_start', 'ref_end', 'mapq', 'cigarstring', 'read_start', 'read_end', 'read_seq', 'merged'])
+Record = namedtuple('Record', ['query_name', 'orientation', 'ref_name', 'ref_start', 'ref_end', 'mapq', 'cigarstring', 'read_start', 'read_end', 'merged'])
 
 complement = {'A': 'T', 'C': 'G', 'G': 'C', 'T': 'A'} 
 
@@ -237,7 +237,7 @@ def strip_soft_hard(cigarstring):
     read_end = read_start+count
     return read_start, read_end, new_cig
 
-def get_record_info(record, read_seq):
+def get_record_info(record):
     query_name = record.query_name
     orientation = '+'
     if record.is_reverse:
@@ -247,22 +247,15 @@ def get_record_info(record, read_seq):
     ref_end = record.reference_end
     mapq = record.mapping_quality
     read_start, read_end, cigarstring = strip_soft_hard(record.cigarstring)
-    return Record(query_name, orientation, ref_name, ref_start, ref_end, mapq, cigarstring, read_start, read_end, read_seq, False)
+    return Record(query_name, orientation, ref_name, ref_start, ref_end, mapq, cigarstring, read_start, read_end, False)
 
-def merge_records(records, header, reference_gap_minimum, minimum_mapping_qual, min_detected_inclusion_length, in_fq, f_lock):
+def merge_records(records, header, reference_gap_minimum, minimum_mapping_qual, min_detected_inclusion_length, f_lock):
     # Assume that records has been sorted by chromsosme and position
     records_to_return = {}
     alignments_to_output = []
     alignment_start_end = []
     need_hard_clip = []
     # Get the read sequence
-    read_seq = ""
-    f_lock.acquire()
-    try:
-        read_seq = in_fq.fetch(records[0].query_name)
-    except:
-        pass
-    f_lock.release()
     count = 0
     if len(records) > 1:
         # Check for split reads
@@ -278,7 +271,7 @@ def merge_records(records, header, reference_gap_minimum, minimum_mapping_qual, 
                 (abs(record_1.reference_end - record_2.reference_start) > int(reference_gap_minimum) and 
                 abs(record_2.reference_end - record_1.reference_start) > int(reference_gap_minimum)) or
                 record_1.mapping_quality < minimum_mapping_qual or record_2.mapping_quality < minimum_mapping_qual):
-                records_to_return[count] = get_record_info(record_1, read_seq)
+                records_to_return[count] = get_record_info(record_1)
                 count += 1
                 record_1 = record_2
                 i += 1
@@ -308,16 +301,16 @@ def merge_records(records, header, reference_gap_minimum, minimum_mapping_qual, 
                 read_start = int(tmp_str.split("_")[0])
                 read_end = int(tmp_str.split("_")[1])
                 # Manually add details to records_to_return
-                records_to_return[count] = Record(query_name, orientation, ref_name, ref_start, ref_end, mapq, cigarstring, read_start, read_end, read_seq, True)
+                records_to_return[count] = Record(query_name, orientation, ref_name, ref_start, ref_end, mapq, cigarstring, read_start, read_end, True)
                 count += 1
                 records = records[i+1:]
                 i = 1
             else:
                 # Need to check insertions in each of the records together
                 # Don't want to exclude them just because they aren't properly split
-                records_to_return[count] = get_record_info(record_1, read_seq)
+                records_to_return[count] = get_record_info(record_1)
                 count += 1
-                records_to_return[count] = get_record_info(record_2, read_seq)
+                records_to_return[count] = get_record_info(record_2)
                 count += 1
                 i += 1
                 if i < len(records):
@@ -325,11 +318,11 @@ def merge_records(records, header, reference_gap_minimum, minimum_mapping_qual, 
                     record_1 = records[i]
                     i += 1
         #Check insertion for record_1 now
-        records_to_return[count] = get_record_info(record_1, read_seq)
+        records_to_return[count] = get_record_info(record_1)
         count += 1
     else:
         # Single mapping for read, Check for insert
-        records_to_return[count] = get_record_info(records[0], read_seq)
+        records_to_return[count] = get_record_info(records[0])
         count += 1
     return records_to_return
 
@@ -401,33 +394,46 @@ def get_insertion_pos(cigarstring, min_detected_inclusion_length):
             read_count += int(cg[:cg.find("I")])
         elif cg.endswith('S'):
             read_count += int(cg[:cg.find("S")])
+        elif cg.endswith('H'):
+            read_count += int(cg[:cg.find("H")])
         elif cg.endswith('D'):
             ref_count += int(cg[:cg.find("D")])
         elif cg.endswith('N'):
             ref_count += int(cg[:cg.find("N")])
     return insert_positions
 
-def get_tsv_record(record, max_ref_gap_at_candidate, min_detected_inclusion_length, min_mapq, min_insertion_length, min_flank_size):
+def get_tsv_record(record, max_ref_gap_at_candidate, min_detected_inclusion_length, min_mapq, min_insertion_length, min_flank_size, min_read_len, in_fq, f_lock):
     records_to_output = {}
     read_annotation = "PASS"
     if record.mapq < min_mapq:
         read_annotation = "mapq<20" 
     # check for any long insertions
     insert_positions = get_insertion_pos(record.cigarstring, min_detected_inclusion_length)
+    deletion_positions = get_deletion_pos(record.cigarstring)
     count = 0
     merged = False
+    read_seq = None
+    if len(insert_positions) > 0 :
+        f_lock.acquire()
+        try:
+            read_seq = in_fq.fetch(record.query_name)
+            if len(read_seq) < min_read_len:
+                read_annotation = update_annotation(read_annotation, "min_read_length")
+        except:
+            pass
+        f_lock.release()
     for insert in insert_positions:
         ref_start = insert[2]+record.ref_start
         ref_end = insert[2]+1+record.ref_start
         read_start = insert[0]
         read_end = insert[0]+insert[1]
-        insertion_sequence = ""
-        if record.read_seq is not None:
-            insertion_sequence = record.read_seq[read_start:read_end]
         if record.orientation == '-' and insertion_sequence != "":
-            tmp = len(record.read_seq) - read_start
-            read_start = len(record.read_seq) - read_end
+            tmp = len(read_seq) - read_start
+            read_start = len(read_seq) - read_end
             read_end = tmp
+        insertion_sequence = ""
+        if read_seq is not None:
+            insertion_sequence = read_seq[read_start:read_end]
         if record.merged:
             merged = True
         annotation = read_annotation
@@ -436,15 +442,14 @@ def get_tsv_record(record, max_ref_gap_at_candidate, min_detected_inclusion_leng
             annotation = update_annotation(annotation, "flank_size")
         if not read_end-read_start >= min_insertion_length:
             annotation = update_annotation(annotation, "min_insertion_length")
-        deletion_positions = get_deletion_pos(record.cigarstring)
         if len(deletion_positions) > 0:
             for del_pos in deletion_positions:
-                if record.read_seq is not None:
+                if read_seq is not None:
                     read_start_tmp = read_start
                     read_end_tmp = read_end
                     if record.orientation == '-':
-                        tmp = len(record.read_seq) - read_start
-                        read_start_tmp = len(record.read_seq) - read_end
+                        tmp = len(read_seq) - read_start
+                        read_start_tmp = len(read_seq) - read_end
                         read_end_tmp = tmp
                     if ((abs(del_pos[0] - read_start_tmp) < 2*del_pos[1] or abs(del_pos[0] - read_end_tmp) < 2*del_pos[1]) and 
                         (read_end_tmp - read_start_tmp)*0.75 < del_pos[1]):
@@ -460,7 +465,7 @@ def get_tsv_record(record, max_ref_gap_at_candidate, min_detected_inclusion_leng
 
 
 class myThread (threading.Thread):
-   def __init__(self, i, q,header, reference_gap_minimum, min_mapq, min_detected_inclusion_length, in_fq, min_insertion_length, min_flank_size, t_lock, f_lock, out_tsv, out_merged):
+   def __init__(self, i, q,header, reference_gap_minimum, min_mapq, min_detected_inclusion_length, in_fq, min_insertion_length, min_flank_size, min_read_len, t_lock, f_lock, out_tsv, out_merged):
       threading.Thread.__init__(self)
       self.i = i
       self.q = q
@@ -471,6 +476,7 @@ class myThread (threading.Thread):
       self.in_fq = in_fq
       self.min_insertion_length = min_insertion_length
       self.min_flank_size = min_flank_size
+      self.min_read_len = min_read_len
       self.t_lock = t_lock
       self.f_lock = f_lock
       self.out_tsv = out_tsv
@@ -489,20 +495,23 @@ class myThread (threading.Thread):
             #if count % 1000 == 0:
             #    print(str(self.i)+"\t"+str(count))
             #count += 1
-            records = sorted(record_list, key = lambda x: (x.reference_id, x.reference_start))
-            # Go read by read based on sorted records. Merge first and then extract
-            new_records = merge_records(records, self.header, self.reference_gap_minimum, self.min_mapq, self.min_detected_inclusion_length, self.in_fq, self.f_lock)
+            if len(record_list) > 1:
+                records = sorted(record_list, key = lambda x: (x.reference_id, x.reference_start))
+                # Go read by read based on sorted records. Merge first and then extract
+            else:
+                records = record_list
+            new_records = merge_records(records, self.header, self.reference_gap_minimum, self.min_mapq, self.min_detected_inclusion_length, self.f_lock)
             for c in new_records:
-                inserts, merged = get_tsv_record(new_records[c], self.reference_gap_minimum, self.min_detected_inclusion_length, self.min_mapq, self.min_insertion_length, self.min_flank_size)
+                inserts, merged = get_tsv_record(new_records[c], self.reference_gap_minimum, self.min_detected_inclusion_length, self.min_mapq, self.min_insertion_length, self.min_flank_size, self.min_read_len, self.in_fq, self.f_lock)
                 self.t_lock.acquire()
-                for c in inserts:
-                    self.out_tsv.write(inserts[c]+"\n")
+                for i in inserts:
+                    self.out_tsv.write(inserts[i]+"\n")
                 if merged:
                     self.out_merged.write(read_id+"\n")
                 self.t_lock.release()
 
 
-def extract_candidate_insertions(bam, output_tsv, output_merged, min_insertion_length, min_detected_inclusion_length, min_flank_size, min_mapq, reference_gap_minimum, fastq_file, threads):
+def extract_candidate_insertions(bam, output_tsv, output_merged, min_insertion_length, min_detected_inclusion_length, min_flank_size, min_read_len, min_mapq, reference_gap_minimum, fastq_file, threads):
     t_lock = threading.Lock()
     f_lock = threading.Lock()
     with open(output_tsv, 'w') as out_tsv, open(output_merged, 'w') as out_merged, pysam.FastaFile(filename = fastq_file) as in_fq:
@@ -525,7 +534,7 @@ def extract_candidate_insertions(bam, output_tsv, output_merged, min_insertion_l
                 count += 1
             thread_list = [None] *threads
             for i in range(threads):
-                thread_list[i] = myThread(i, q_list[i], header, reference_gap_minimum, min_mapq, min_detected_inclusion_length, in_fq, min_insertion_length, min_flank_size,t_lock,f_lock,out_tsv,out_merged)
+                thread_list[i] = myThread(i, q_list[i], header, reference_gap_minimum, min_mapq, min_detected_inclusion_length, in_fq, min_insertion_length, min_flank_size, min_read_len, t_lock,f_lock,out_tsv,out_merged)
                 thread_list[i].start()
             for i in range(threads):
                 thread_list[i].join()

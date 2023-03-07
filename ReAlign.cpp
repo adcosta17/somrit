@@ -740,6 +740,21 @@ std::pair<std::string, int> get_final_cig(std::vector<std::pair<int, char>>& fin
 	return make_pair(final_cig_str, op_count);
 }
 
+std::string convert_to_single_bp_cigar(const std::string& input_cigar){
+	using namespace std;
+	string out_cigar = "";
+	istringstream input_parser(input_cigar);
+	char op;
+	uint32_t ol;
+	while(input_parser >> ol >> op){
+		for(int i = 0; i < ol; i++){
+			//cout << "1"+op; 
+			out_cigar = out_cigar+'1'+op;
+		}
+	}
+	return out_cigar;
+}
+
 bool project_alignment(int hap_start, std::vector<std::pair<int,int>> hap_insert_positions, const std::string& alt_cigar, const std::vector<std::string>& hap_names, const std::string sample, const std::string read_name, std::string& read_sequence, const char read_orientation, const std::string chrom, htsFile *outfile, bam_hdr_t *header, const int startLocation, const int endLocation, const int readStart, const int readEnd, const int t){
 	using namespace std;
 	// Convert hap_insert_positions to a CIGAR String
@@ -748,9 +763,9 @@ bool project_alignment(int hap_start, std::vector<std::pair<int,int>> hap_insert
 	string hap_to_ref_cigar = "";
 	int count_cigar_ops = 0;
 	bool print = false;
-	//if(read_name == "6c511c9c-77c2-4026-9641-aea24487fd04"){
+	//if(read_name == "f954498b-fef4-4355-9e9a-155e66bd0bce"){
 	//	print = true;
-	//	cerr << hap_name << "\t" << hap_to_ref_cigar << endl;
+	//	cerr << read_name <<  endl;
 	//	cerr << startLocation << "\t" << hap_start <<"\t" << endLocation << endl;
 	//}
 	for(size_t i = 0; i < hap_insert_positions.size(); i++){
@@ -831,10 +846,13 @@ bool project_alignment(int hap_start, std::vector<std::pair<int,int>> hap_insert
 	}
 	read_count = 0;
 	int hap_length = parse_cigar_string(hap_to_ref_cigar);
-	// Convert CIGAR strings to vectors of ops with offsets 
-	// Start parsing
-	istringstream hap_to_ref_parser(hap_to_ref_cigar);
-	istringstream read_to_hap_parser(alt_cigar);
+	// Convert CIGAR strings to 1bp representations and parse
+	istringstream hap_to_ref_parser(convert_to_single_bp_cigar(hap_to_ref_cigar));
+	istringstream read_to_hap_parser(convert_to_single_bp_cigar(alt_cigar));
+	if(print){
+		cout << "hap_to_ref_cigar " << hap_to_ref_cigar << endl;
+		cout << "alt_cigar " << alt_cigar << endl;
+	}
 	char hr_op;
 	uint32_t hr_ol;
 	char op;
@@ -850,98 +868,45 @@ bool project_alignment(int hap_start, std::vector<std::pair<int,int>> hap_insert
 	bool in_insert = false;
 	unordered_map<string, pair<int,int>> hap_to_read_pos;
 	while(read_to_hap_parser >> ol >> op){
+		// parse one bp at a time
 		if(hap_count > hap_length){
 			// Should not iterate past the end of the hap
 			break;
 		}
-		if(hap_count > hap_to_ref_count){
-			// parse another op
-			if(hap_to_ref_parser >> hr_ol >> hr_op){
-				hap_to_ref_count += hr_ol;
-				seen_ops++;
-			} else {
-				// Should not run out of ops to parse before the end of the alignment
-				out_lock.lock();
-				cerr << t << " " << "Not enough CIGAR Ops for 1: " << read_name << endl;
-				out_lock.unlock();
-				return false;
+		if(hr_op == 'M'){
+			// If a match then output the read to hap operation for this base
+			// If the read to hap operation consumes hap sequence then parse the hap CIGAR as well
+			final_cig.push_back(make_pair(1, op));
+			if(op == 'M' || op == 'D' || op == '=' || op == 'X'){
+				hap_to_ref_parser >> hr_ol >> hr_op;
 			}
-			if(print){
-				cout << t << " " << "before " << in_insert << " " << read_insert_start << " " << read_insert_end << endl;
+			if(op == 'M' || op == 'I' || op == '=' || op == 'X'){
+				read_count += 1;
 			}
-			if(!in_insert){
-				read_insert_start = read_count;
-				in_insert = true;
-			} else {
+			if(in_insert){
+				in_insert = false;
 				read_insert_end = read_count;
 			}
-			if(print){
-				cout << t << " " << "after " << in_insert << " " << read_insert_start << " " << read_insert_end << endl;
+		} else if(hr_op == 'I'){
+			if(op == 'M' || op == 'I' || op == '=' || op == 'X'){
+				final_cig.push_back(make_pair(1, 'I'));
+				read_count += 1;
 			}
-		}
-		if(print){
-			cout << t << " " << op << " " << ol << " " << hr_op << " " << hr_ol << endl;
-		}
-		if (op == 'M' || op == '=' || op == 'X'){
-			//Parse both
-			hap_count += ol;
-			read_count += ol;
-			op_count += 1;
-			hap_op_count += 1;
-		} else if(op == 'I'){
-			read_count += ol;
-			op_count += 1;
-		} else if(op == 'D'){
-			hap_count += ol;
-			hap_op_count += 1;
-		}
-		// Check if our read to hap op is fully covered by the current hap to ref op 
-		if(hap_to_ref_count - hap_count >= 0){
-			// Covered can project as needed to our output CIGAR based on hr_op and op values
-			pair<int, char> item = get_projected_op(ol, op, hr_op);
-			if(item.first > 0){
-				final_cig.push_back(item);
+			if(!in_insert){
+				in_insert = true;
+				read_insert_start = read_count;
+			}
+			if(op == 'M' || op == 'D' || op == '=' || op == 'X'){
+				hap_to_ref_parser >> hr_ol >> hr_op;
 			}
 		} else {
-			// op spans a break between hr_op values. Need to go base by base
-			int prev_count = hap_count - ol;
-			int diff = hap_to_ref_count - prev_count;
-			// Output diff number of operations
-			pair<int, char> item = get_projected_op(diff, op, hr_op);
-			if(item.first > 0){
-				final_cig.push_back(item);
-			}
-			// Now update the hap_to_ref_count by parsing the next op
-			if(seen_ops < count_cigar_ops){
-				hap_to_ref_parser >> hr_ol >> hr_op;
-				hap_to_ref_count += hr_ol;
-				seen_ops++;
-			}
-			// Compute the remainder of the ol to now be projected to this new op
-			int rest = ol - diff;
-			// Project rest bases against hap with new hr_op value
-			if(rest > 0){
-				item = get_projected_op(rest, op, hr_op);
-				if(item.first > 0){
-					final_cig.push_back(item);
-				}
-			}
-			if(rest >= 0 && hap_op_count > 0){
-				if(print){
-					cout << t << " " << "before " << in_insert << " " << read_insert_start << " " << read_insert_end << endl;
-				}
-				if(!in_insert){
-					read_insert_start = read_count - rest;
-					in_insert = true;
-				} else {
-					read_insert_end = read_count - rest;
-				}
-				if(print){
-					cout << t << " " << "after " << in_insert << " " << read_insert_start << " " << read_insert_end << endl;
-				}
-			}
+			// If not either Match or Insert we have a problem
+			out_lock.lock();
+			cerr << t << " " << "ERROR: Invalid Hap to Ref Operation for " << read_name << endl;
+			out_lock.unlock();
+			return false;
 		}
-		if(read_insert_start > 0 && read_insert_end > 0 && read_insert_end - read_insert_start >= 100 && op_count > 0){
+		if(read_insert_start > 0 && read_insert_end > 0 && read_insert_end - read_insert_start >= 50){
 			// add to the map for hap name
 			if(print){
 				cout << t << " " << hap_names.size() << " hap names " << read_insert_start << " " << read_insert_end << " " << hap_name_count << endl;
@@ -950,9 +915,6 @@ bool project_alignment(int hap_start, std::vector<std::pair<int,int>> hap_insert
 			hap_name_count += 1;
 			read_insert_start = -1;
 			read_insert_end = -1;
-			op_count = 0;
-			hap_op_count = 0;
-			in_insert = false;
 		}
 	}
 	// Add the end soft clip
@@ -982,7 +944,7 @@ bool project_alignment(int hap_start, std::vector<std::pair<int,int>> hap_insert
 		read_sequence = dna_reverse_complement(read_sequence);
 	}
 	if(print){
-		cout << t << " " << read_sequence.length() << "  " << parse_cigar_string(final_cig_data.first);
+		cout << "Lengths: " << read_sequence.length() << "  " << parse_cigar_string(final_cig_data.first) << endl;
 	}
 	int ret = write_bam_record(final_cig_data.first, read_name, hap_start, orientation, chrom, final_cig_data.second, read_sequence, outfile, header, t, sample);
 	if(ret >= 0){
@@ -1113,7 +1075,7 @@ std::unordered_map<std::string,std::unordered_map<std::string,std::vector<std::s
 		string sample = it->first;
 		for(auto it2 = it->second.begin(); it2 != it->second.end(); ++it2){
 			bool print = false;
-			//if(it2->first == "b2e13b6b-3cc1-4299-b20a-57016d458675" || it2->first == "6c511c9c-77c2-4026-9641-aea24487fd04"){
+			//if(it2->first == "f954498b-fef4-4355-9e9a-155e66bd0bce"){
 			//	cerr << it2->first << endl;
 			//	print = true;
 			//}
@@ -1200,11 +1162,14 @@ std::vector<std::tuple<int,int,int>> get_insert_position(std::string& cigar, int
 			ref_count += ol;
 			seq_count += ol;
 			if(print){
-				cerr << op << " " << ref_count << " " << ref_pos + ref_count << endl;
+				cerr << op << " " << ol << " " << ref_count << " " << ref_pos + ref_count << endl;
 			}
 		} else if(op == 'I'){
-			// Check if insert length is long enough to be considered 
-			if(ol >= 100){
+			// Check if insert length is long enough to be considered
+			if(print){
+				cerr  << op << " " << seq_count << " " << ol << " "  << ref_count << endl;
+			}
+			if(ol >= 50){
 				// Add to the list of larger_inserts
 				larger_inserts.push_back(make_tuple(seq_count,ol,ref_count));
 				if(print){
@@ -1215,7 +1180,7 @@ std::vector<std::tuple<int,int,int>> get_insert_position(std::string& cigar, int
 		} else if(op == 'D'){
 			ref_count += ol;
 			if(print){
-				cerr << op << " " << ref_count << " " << ref_pos + ref_count << endl;
+				cerr << op << " " << ol << " " << ref_count << " " << ref_pos + ref_count << endl;
 			}
 		} else {
 			if(print){
@@ -1226,13 +1191,13 @@ std::vector<std::tuple<int,int,int>> get_insert_position(std::string& cigar, int
 	return larger_inserts;
 }
 
-std::unordered_map<int, std::vector<std::tuple<int, int, std::string, int, int, int, std::string>>> get_consensus_hap(const int start, const std::string& chrom, const std::string& ref_sequence, const std::unordered_map<std::string, std::vector<TsvRecord>>& inserts_per_sample, const int ref_window, std::unordered_map<std::string, std::unordered_map<std::string,std::string>>& read_sequences_per_sample, int gap_open, int gap_extend, int t, const int max_mem, const int high_mem, const int window, mm_tbuf_t *tbuf, const int max_insert_size, const int max_depth){
+std::unordered_map<int, std::vector<std::tuple<int, int, std::string, int, int, int, std::string>>> get_consensus_hap(const int start, const std::string& chrom, const std::string& ref_sequence, const std::unordered_map<std::string, std::vector<TsvRecord>>& inserts_per_sample, const int ref_window, std::unordered_map<std::string, std::unordered_map<std::string,std::string>>& read_sequences_per_sample, int gap_open, int gap_extend, int t, const int max_mem, const int high_mem, const int window, mm_tbuf_t *tbuf, const int max_insert_size, const int max_depth, const int max_con){
 	// Extract the read sequences of any insert supporting reads in this window.
 	// Compute a consensus for them, select the largest one
 	using namespace std;
 	int window_to_use = window;
 	bool print = false;
-	//if(start < 13190687 && start + window > 13190887){
+	//if(start < 44606945 && start + window > 44606945){
 	//	print = true;
 	//}
 	int ref_start = start;
@@ -1325,7 +1290,7 @@ std::unordered_map<int, std::vector<std::tuple<int, int, std::string, int, int, 
 			abpt->w = 50, abpt->k = 17; abpt->min_w = 500; // minimizer-based seeding and partition
 			//abpt->progressive_poa = 1;
 			abpt->disable_seeding = 0;
-			abpt->max_n_cons = 3;
+			abpt->max_n_cons = max_con;
 			abpoa_post_set_para(abpt);
 			// Get the lengths of each hap sequence and convert from ACGT to 0123
 			int *seq_lens = (int*)malloc(sizeof(int)*haps_to_align.size());
@@ -1726,7 +1691,7 @@ void realign_reads(const int t, const std::unordered_map<std::string, faidx_t*>&
 }
 
 
-void haps_only_chrom(const int t, const std::unordered_map<std::string, std::map<int, std::vector<TsvRecord>>>& all_tsv_records, const std::unordered_map<std::string, faidx_t*>& samples_to_faidx, const std::unordered_map<std::string, std::string>& samples_to_bam, const std::unordered_map<std::string, std::string>& ref_sequences, const int gap_open, const int gap_extend, const int min_mapq, const int depth_filter, htsFile *outfile, bam_hdr_t *header, const std::string& output_fasta, const int max_mem, const int high_mem, const bool include_haplotypes, const int max_insert_size){
+void haps_only_chrom(const int t, const std::unordered_map<std::string, std::map<int, std::vector<TsvRecord>>>& all_tsv_records, const std::unordered_map<std::string, faidx_t*>& samples_to_faidx, const std::unordered_map<std::string, std::string>& samples_to_bam, const std::unordered_map<std::string, std::string>& ref_sequences, const int gap_open, const int gap_extend, const int min_mapq, const int depth_filter, htsFile *outfile, bam_hdr_t *header, const std::string& output_fasta, const int max_mem, const int high_mem, const bool include_haplotypes, const int max_insert_size, const int max_con){
 	using namespace std;
 	mm_tbuf_t *tbuf = mm_tbuf_init();
 	while(true){
@@ -1760,36 +1725,40 @@ void haps_only_chrom(const int t, const std::unordered_map<std::string, std::map
 
 		// -- Make a parameters struct
 		// -- Return a struct 
-		unordered_map<int, vector<tuple<int, int, string, int, int, int, string>>> consensus_tuples = get_consensus_hap(pos, chrom, ref_sequence, inserts_per_sample, max_read_len, read_sequences_per_sample, gap_open, gap_extend, t, max_mem, high_mem, window, tbuf, max_insert_size, depth_filter);
+		unordered_map<int, vector<tuple<int, int, string, int, int, int, string>>> consensus_tuples = get_consensus_hap(pos, chrom, ref_sequence, inserts_per_sample, max_read_len, read_sequences_per_sample, gap_open, gap_extend, t, max_mem, high_mem, window, tbuf, max_insert_size, depth_filter, max_con);
 		for(size_t h = 0; h < consensus_tuples.size(); h++){
+			string hap_names = "";
+			int window_to_use = 100000;
+			int min_pos = pos-window_to_use;
+			if(min_pos < 0){
+				min_pos = 0;
+			}
+			int l = 2*window_to_use;
+			if(min_pos + l > ref_sequence.length()){
+				l = ref_sequence.length() - min_pos - 1;
+			}
+			string alt_hap_seq = ref_sequence.substr(min_pos, l);
+			int added_bases = 0;
 			for(size_t i = 0; i < consensus_tuples[h].size(); i++){
 				tuple<int, int, string, int, int, int, string> hap_tuple = consensus_tuples[h][i];
-				int window_to_use = get<5>(hap_tuple);
-				if(window_to_use < 10000){
-					window_to_use = 10000;
-				}
-				int min_pos = pos-window_to_use;
-				if(min_pos < 0){
-					min_pos = 0;
-				}
-				int l = 2*window_to_use;
-				if(min_pos + l > ref_sequence.length()){
-					l = ref_sequence.length() - min_pos - 1;
-				}
-				string alt_hap_seq = ref_sequence.substr(min_pos, l);
-				int hap_position = (pos + get<0>(hap_tuple)) - min_pos;
+				int hap_position = (pos + get<0>(hap_tuple)) - (min_pos - added_bases);
 				if(hap_position < 0 || hap_position > alt_hap_seq.length()){
 					continue;
 				}
 				alt_hap_seq = alt_hap_seq.substr(0, hap_position)+get<2>(hap_tuple)+alt_hap_seq.substr(hap_position);
-				ofstream output_file;
-				tsv_lock.lock();
-				output_file.open(output_fasta, ios_base::app);
-				output_file << ">" << get<6>(hap_tuple) << "_" << to_string(pos) << "\n" << alt_hap_seq << "\n";
-				output_file.close();
-				//cout << get<6>(hap_tuple) << endl;
-				tsv_lock.unlock();
+				if(i != 0){
+					hap_names += ",";
+				}
+				hap_names += to_string(hap_position)+"_"+to_string(get<2>(hap_tuple).length())+"_"+chrom+":"+to_string((pos + get<0>(hap_tuple)+added_bases));
+				added_bases += get<1>(hap_tuple);
 			}
+			ofstream output_file;
+			tsv_lock.lock();
+			output_file.open(output_fasta, ios_base::app);
+			output_file << chrom << "\t" << to_string(pos) << "\t" << hap_names << "\t" << alt_hap_seq << "\n";
+			output_file.close();
+			//cout << get<6>(hap_tuple) << endl;
+			tsv_lock.unlock();
 		}
 		//Update global list of reads per sample to map each read to its respective alternative haplotype
 		for(size_t j = 0; j < reads_in_window.size(); j++){
@@ -1808,7 +1777,7 @@ void haps_only_chrom(const int t, const std::unordered_map<std::string, std::map
 }
 
 
-void realign_chrom(const int t, const std::unordered_map<std::string, std::map<int, std::vector<TsvRecord>>>& all_tsv_records, const std::unordered_map<std::string, faidx_t*>& samples_to_faidx, const std::unordered_map<std::string, std::string>& samples_to_bam, const std::unordered_map<std::string, std::string>& ref_sequences, const int gap_open, const int gap_extend, const int min_mapq, const int depth_filter, htsFile *outfile, bam_hdr_t *header, const std::string& tsv_output, const int max_mem, const int high_mem, const bool include_haplotypes, const int max_insert_size){
+void realign_chrom(const int t, const std::unordered_map<std::string, std::map<int, std::vector<TsvRecord>>>& all_tsv_records, const std::unordered_map<std::string, faidx_t*>& samples_to_faidx, const std::unordered_map<std::string, std::string>& samples_to_bam, const std::unordered_map<std::string, std::string>& ref_sequences, const int gap_open, const int gap_extend, const int min_mapq, const int depth_filter, htsFile *outfile, bam_hdr_t *header, const std::string& tsv_output, const int max_mem, const int high_mem, const bool include_haplotypes, const int max_insert_size, const int max_con){
 	using namespace std;
 	mm_tbuf_t *tbuf = mm_tbuf_init();
 	while(true){
@@ -1843,7 +1812,7 @@ void realign_chrom(const int t, const std::unordered_map<std::string, std::map<i
 		// -- Make a parameters struct
 		// -- Return a struct 
 		auto start1 = chrono::high_resolution_clock::now();
-		unordered_map<int, vector<tuple<int, int, string, int, int, int, string>>> consensus_tuples = get_consensus_hap(pos, chrom, ref_sequence, inserts_per_sample, max_read_len, read_sequences_per_sample, gap_open, gap_extend, t, max_mem, high_mem, window, tbuf, max_insert_size, depth_filter);
+		unordered_map<int, vector<tuple<int, int, string, int, int, int, string>>> consensus_tuples = get_consensus_hap(pos, chrom, ref_sequence, inserts_per_sample, max_read_len, read_sequences_per_sample, gap_open, gap_extend, t, max_mem, high_mem, window, tbuf, max_insert_size, depth_filter, max_con);
 		// Get a set of alternative haplotypes for the window
 		//if(consensus_tuples.size() == 0){
 			//cout << t << " Getting hap_set " << endl;
@@ -1951,7 +1920,7 @@ void write_all_original(const std::unordered_map<std::string, std::string>& samp
 }
 
 // Main wrapper function that gets called from somrit interface
-void ReAlign::realign_all(const std::string& bam_list, const std::string& tsv_list, const std::string& fastq_list, const std::string& sample_list, const std::string& output_tsv, const std::string& output_bam, const int window, const std::string& ref, const int gap_open, const int gap_extend, const int min_mapq, const std::string& chrom_list, const int pass_only, const int depth_filter, const int threads, const int max_mem, const int high_mem, const int include_haps, const int max_window_size, const int max_insert_size){
+void ReAlign::realign_all(const std::string& bam_list, const std::string& tsv_list, const std::string& fastq_list, const std::string& sample_list, const std::string& output_tsv, const std::string& output_bam, const int window, const std::string& ref, const int gap_open, const int gap_extend, const int min_mapq, const std::string& chrom_list, const int pass_only, const int depth_filter, const int threads, const int max_mem, const int high_mem, const int include_haps, const int max_window_size, const int max_insert_size, const int max_con){
 	using namespace std;
 	// Read in the lists of bams, fastqs and tsvs
 	htsFile *outfile= hts_open(output_bam.c_str(), "w");
@@ -2043,7 +2012,7 @@ void ReAlign::realign_all(const std::string& bam_list, const std::string& tsv_li
 		print_debug("Identify and Align reads to Alternative Haplotypes");
 		vector<thread> thread_pool;
 		for (int i = 0; i < threads; i++) {
-			thread_pool.push_back(thread(realign_chrom, i, cref(all_tsv_records), cref(samples_to_faidx), cref(samples_to_bam), cref(ref_sequences), gap_open, gap_extend, min_mapq, (int) depth_filter*samples.size(), outfile, header, cref(output_tsv), max_mem, high_mem, include_haplotypes, max_insert_size));
+			thread_pool.push_back(thread(realign_chrom, i, cref(all_tsv_records), cref(samples_to_faidx), cref(samples_to_bam), cref(ref_sequences), gap_open, gap_extend, min_mapq, (int) depth_filter*samples.size(), outfile, header, cref(output_tsv), max_mem, high_mem, include_haplotypes, max_insert_size, max_con));
 		}
 		for (auto &th : thread_pool) {
 			th.join();
@@ -2099,7 +2068,7 @@ void ReAlign::realign_all(const std::string& bam_list, const std::string& tsv_li
 
 
 
-void ReAlign::haps_only(const std::string& bam_list, const std::string& tsv_list, const std::string& fastq_list, const std::string& sample_list, const std::string& output_fasta, const int window, const std::string& ref, const int gap_open, const int gap_extend, const int min_mapq, const std::string& chrom_list, const int pass_only, const int depth_filter, const int threads, const int max_mem, const int high_mem, const int include_haps, const int max_window_size, const int max_insert_size){
+void ReAlign::haps_only(const std::string& bam_list, const std::string& tsv_list, const std::string& fastq_list, const std::string& sample_list, const std::string& output_fasta, const int window, const std::string& ref, const int gap_open, const int gap_extend, const int min_mapq, const std::string& chrom_list, const int pass_only, const int depth_filter, const int threads, const int max_mem, const int high_mem, const int include_haps, const int max_window_size, const int max_insert_size, const int max_con){
 	using namespace std;
 	// Read in the lists of bams, fastqs and tsvs
 	htsFile *outfile = NULL;
@@ -2172,7 +2141,7 @@ void ReAlign::haps_only(const std::string& bam_list, const std::string& tsv_list
 		print_debug("Identify and Align reads to Alternative Haplotypes");
 		vector<thread> thread_pool;
 		for (int i = 0; i < threads; i++) {
-			thread_pool.push_back(thread(haps_only_chrom, i, cref(all_tsv_records), cref(samples_to_faidx), cref(samples_to_bam), cref(ref_sequences), gap_open, gap_extend, min_mapq, (int) depth_filter*samples.size(), outfile, header, cref(output_fasta), max_mem, high_mem, include_haplotypes, max_insert_size));
+			thread_pool.push_back(thread(haps_only_chrom, i, cref(all_tsv_records), cref(samples_to_faidx), cref(samples_to_bam), cref(ref_sequences), gap_open, gap_extend, min_mapq, (int) depth_filter*samples.size(), outfile, header, cref(output_fasta), max_mem, high_mem, include_haplotypes, max_insert_size, max_con));
 		}
 		for (auto &th : thread_pool) {
 			th.join();
@@ -2213,6 +2182,7 @@ int main(int argc, char *argv[]){
 	int max_insert_size = 10000;
 	int max_window_size = 25000;
 	bool high_mem = false;
+	int max_con = 2;
 	const char* const short_opts = "b:f:i:s:o:l:w:r:d:t:c:m:n:ape";
 	const option long_opts[] = {
 			{"bam-list", required_argument, nullptr, 'b'},
@@ -2297,7 +2267,7 @@ int main(int argc, char *argv[]){
 		use_high_mem = 1;
 	}
 
-	tmp->realign_all(bam_list, insert_list, fastq_list, sample_list, output_tsv, output_sam, window, ref_file, 11,1, 10, chrom_list, pass, max_depth, threads, 5000000000, use_high_mem, include_haps, max_window_size, max_insert_size);
+	tmp->realign_all(bam_list, insert_list, fastq_list, sample_list, output_tsv, output_sam, window, ref_file, 11,1, 10, chrom_list, pass, max_depth, threads, 5000000000, use_high_mem, include_haps, max_window_size, max_insert_size, max_con);
 	delete tmp;
 	return 0;
 }

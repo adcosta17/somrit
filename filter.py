@@ -22,12 +22,27 @@ def reverse_complement(seq):
 
 def get_nearby(chrom, start, end, seen):
     i = start
-    nearby = []
+    count = 0
+    nearby = {}
     if chrom not in seen:
         return nearby
     while i < end:
         if i in seen[chrom]:
-            nearby.extend(seen[chrom][i])
+            nearby[count] = seen[chrom][i]
+            count += 1
+        i += 1
+    return nearby
+
+def get_nearby_with_position(chrom, start, end, seen):
+    i = start
+    nearby = {}
+    count = 0
+    if chrom not in seen:
+        return nearby
+    while i < end:
+        if i in seen[chrom]:
+            nearby[count] = [seen[chrom][i], i]
+            count += 1
         i += 1
     return nearby
 
@@ -35,12 +50,33 @@ def filter_control(chrom, start, end, seen, control_sample):
     if control_sample is not None:
         nearby = get_nearby(chrom, start-500, end+500, seen)
         for item in nearby:
-            sample = item.split(':')[0]
+            for j in nearby[item]:
+                sample = j.split(':')[0]
             if sample == control_sample:
                 return "In_Control_Sample"
     return None
 
-def get_polymorphic_in_window(chrom, start, end, seen, softclips, control_sample, bam_ref_positions, window, cutoff):
+def get_polymorphic_in_window(chrom, start, end, seen, softclips, control_sample, bam_ref_positions, window, cutoff, total_read_count, nearby):
+    insert_reads = {}
+    for i in nearby:
+        for j in nearby[i][0]:
+            if abs(nearby[i][1]-start) < window or abs(nearby[i][1]-end) < window:
+                sample = j.split(':')[0]
+                if sample == control_sample:
+                    continue
+                read = j.split(':')[1]
+                insert_reads[read] = 1
+    insert_count = len(insert_reads)
+    softclip_count = 0
+    if chrom in softclips:
+        softclip_count = len(softclips[chrom][str(start)+":"+str(end)])
+    if total_read_count == 0:
+        return "NA"
+    if (insert_count+softclip_count)/total_read_count > cutoff:
+        return "Polymorphic_"+str(window)+"_"+str((insert_count+softclip_count)/total_read_count)
+    return "NA"
+
+def check_polymorphic(chrom, start, end, seen, softclips, control_sample, bam_ref_positions):
     total_reads = {}
     for pos in bam_ref_positions[chrom]:
         pos_start = pos.split('-')[0]
@@ -56,33 +92,17 @@ def get_polymorphic_in_window(chrom, start, end, seen, softclips, control_sample
                 if item[2] < start and item[3] > end:
                     total_reads[item[0]] = 1
     total_read_count = len(total_reads)
-    insert_reads = {}
-    nearby = get_nearby(chrom, start-window, end+window, seen)
-    for item in nearby:
-        sample = item.split(':')[0]
-        if sample == control_sample:
-            continue
-        read = item.split(':')[1]
-        insert_reads[read] = 1
-    insert_count = len(insert_reads)
-    softclip_count = len(softclips[chrom][str(start)+":"+str(end)])
-    if total_read_count == 0:
-        return "NA"
-    if (insert_count+softclip_count)/total_read_count > cutoff:
-        return "Polymorphic_"+str(window)+"_"+str((insert_count+softclip_count)/total_read_count)
-    return "NA"
-
-def check_polymorphic(chrom, start, end, seen, softclips, control_sample, bam_ref_positions):
+    nearby = get_nearby_with_position(chrom, start-500, end+500, seen)
     # 500, 0.8
-    ret = get_polymorphic_in_window(chrom, start, end, seen, softclips, control_sample, bam_ref_positions, 500, 0.8)
+    ret = get_polymorphic_in_window(chrom, start, end, seen, softclips, control_sample, bam_ref_positions, 500, 0.8, total_read_count, nearby)
     if ret != "NA":
         return ret
     # 200, 0.5
-    ret = get_polymorphic_in_window(chrom, start, end, seen, softclips, control_sample, bam_ref_positions, 200, 0.5)
+    ret = get_polymorphic_in_window(chrom, start, end, seen, softclips, control_sample, bam_ref_positions, 200, 0.5, total_read_count, nearby)
     if ret != "NA":
         return ret
     # 100, 0.3
-    ret = get_polymorphic_in_window(chrom, start, end, seen, softclips, control_sample, bam_ref_positions, 100, 0.3)
+    ret = get_polymorphic_in_window(chrom, start, end, seen, softclips, control_sample, bam_ref_positions, 100, 0.3, total_read_count, nearby)
     if ret != "NA":
         return ret
     return "NA"
@@ -103,7 +123,7 @@ def filter_insert_map(chrom, start, end, read_positions, sequence, bam_read_posi
         for read in read_positions:
             bam_positions = bam_read_positions[read]
             # Map the insert sequence to the ref and check position. If position overlaps a secondary mapping, flag
-            for bam_pos  in bam_positions:
+            for bam_pos in bam_positions:
                 if bam_pos[0] == chrom and bam_pos[1] <= start and bam_pos[2] >= end:
                     continue
                 if hit.ctg == bam_pos[0] and hit.r_st <= bam_pos[1] and hit.r_en >= bam_pos[2]:
@@ -208,8 +228,9 @@ def filter_min_reads(chrom, start, end, seen, min_reads):
     reads = {}
     nearby = get_nearby(chrom, start-50, end+50, seen)
     for item in nearby:
-        read = item.split(':')[1]
-        reads[read] = 1
+        for j in nearby[item]:
+            read = j.split(':')[1]
+            reads[read] = 1
     if len(reads) < min_reads:
         return "min_reads"
     return None
@@ -261,89 +282,104 @@ class myThread2(threading.Thread):
       self.min_reads = min_reads
       self.softclips = softclips
       self.ref_contigs = ref_contigs
+      self.string = ""
    def run(self):
         times = defaultdict(float)
+        count = 0 
         while(True):
             if self.q.empty():
+                self.t_lock.acquire()
+                self.out_tsv.write(self.string)
+                self.t_lock.release()
                 return
             data = self.q.get()
             row = data[0]
+            if row[6] != "PASS":
+                # Only filter things that are possible insertions to save time
+                row.extend(["NA","NA","NA","NA"])
+                self.string += "\t".join(row)+'\n'
+                count += 1
+                continue
             sequence = row[4]
             read_positions = data[1]
             ret = []
             # Control sample if requested
-            to_print = False
-            #if self.i == 0:
+            #to_print = False
+            #if self.i == 0 and count % 1000 == 0:
             #    to_print = True
-            if to_print:
-                print(row[0]+"\t"+row[1]+"\t"+row[2]+"\t"+row[3])
-            start = time.time()
+            #if to_print:
+            #    print(row[0]+"\t"+row[1]+"\t"+row[2]+"\t"+row[3])
+            #start = time.time()
             ret.append(filter_control(row[0], int(row[1]), int(row[2]), self.seen, self.control_sample))
-            end = time.time()
-            if to_print:
-                times["filter_control"] += (end-start)
-                print("filter_control " + str(times["filter_control"]))
+            #end = time.time()
+            #if to_print:
+            #    times["filter_control"] += (end-start)
+            #    print("filter_control " + str(times["filter_control"]))
             # Centromere/telomere
-            start = time.time()
+            #start = time.time()
             ret.append(filter_centromere_telomere(row, self.centromere_positions, self.telomere_positions))
-            end = time.time()
-            if to_print:
-                times["Centromere/Telomere"] += (end-start)
-                print("Centromere/Telomere " + str(times["Centromere/Telomere"]))
+            #end = time.time()
+            #if to_print:
+            #    times["Centromere/Telomere"] += (end-start)
+            #    print("Centromere/Telomere " + str(times["Centromere/Telomere"]))
             # Insert maps to same location as other mapping for supporting reads
-            start = time.time()
-            ret.append(filter_insert_map(row[0], int(row[1]), int(row[2]), read_positions, sequence, self.bam_read_positions, self.ref_aligner, self.min_mapq))
-            end = time.time()
-            if to_print:
-                times["InsertMap"] += (end-start)
-                print("InsertMap "  + str(times["InsertMap"]))
+            #start = time.time()
+            #ret.append(filter_insert_map(row[0], int(row[1]), int(row[2]), read_positions, sequence, self.bam_read_positions, self.ref_aligner, self.min_mapq))
+            #end = time.time()
+            #if to_print:
+            #    times["InsertMap"] += (end-start)
+            #    print("InsertMap "  + str(times["InsertMap"]))
             # Low mapping quality at area of insertion
-            start = time.time()
+            #start = time.time()
             ret.append(filter_mapping_qual(row[0], int(row[1]), int(row[2]), self.bam_ref_positions, self.min_mapq, self.chrom_list))
-            end = time.time()
-            if to_print:
-                times["Mapping Qual"] += (end-start)
-                print("Mapping Qual " + str(times["Mapping Qual"]))
+            #end = time.time()
+            #if to_print:
+            #    times["Mapping Qual"] += (end-start)
+            #    print("Mapping Qual " + str(times["Mapping Qual"]))
             # Check for min_read support
-            start = time.time()
+            #start = time.time()
             ret.append(filter_min_reads(row[0], int(row[1]), int(row[2]), self.seen, self.min_reads))
-            end = time.time()
-            if to_print:
-                times["MinReads"] += (end-start)
-                print("MinReads " + str(times["MinReads"]))
-            row[7] = update_annotation(row[7], ret)
+            #end = time.time()
+            #if to_print:
+            #    times["MinReads"] += (end-start)
+            #    print("MinReads " + str(times["MinReads"]))
+            row[6] = update_annotation(row[6], ret)
             # Check to see if insertion is polymorphic or not
-            start = time.time()
+            #start = time.time()
             row.append(check_polymorphic(row[0], int(row[1]), int(row[2]), self.seen, self.softclips, self.control_sample, self.bam_ref_positions))
-            end = time.time()
-            if to_print:
-                times["Polymorphic"] += (end-start)
-                print("Polymorphic " + str(times["Polymorphic"]))
+            #end = time.time()
+            #if to_print:
+            #    times["Polymorphic"] += (end-start)
+            #    print("Polymorphic " + str(times["Polymorphic"]))
             # Poly A/T Tail
-            start = time.time()
+            #start = time.time()
             row.append(filter_poly_AT(sequence))
-            end = time.time()
-            if to_print:
-                times["PolyA"] += (end-start)
-                print("PolyA " + str(times["PolyA"]))
+            #end = time.time()
+            #if to_print:
+            #    times["PolyA"] += (end-start)
+            #    print("PolyA " + str(times["PolyA"]))
             # Target Site Duplications
-            start = time.time()
+            #start = time.time()
             tsd = filter_TSD(row[0], int(row[1]), int(row[2]), sequence, self.ref_contigs[row[0]])
-            end = time.time()
-            if to_print:
-                times["TSD"] += (end-start)
-                print("TSD " + str(times["TSD"]))
+            #end = time.time()
+            #if to_print:
+            #    times["TSD"] += (end-start)
+            #    print("TSD " + str(times["TSD"]))
             row.append(tsd)
             # Update the row's annotation based on which filters it failed
-            start = time.time()
+            #start = time.time()
             row.append(get_motif(row[0], int(row[1]), int(row[2]), sequence, self.ref_contigs[row[0]], row[9], tsd))
-            end = time.time()
-            if to_print:
-                times["Motif"] += (end-start)
-                print("Motif" + str(times["Motif"]))
-            self.t_lock.acquire()
-            self.out_tsv.write("\t".join(row)+'\n')
-            self.t_lock.release()
+            #end = time.time()
+            #if to_print:
+            #    times["Motif"] += (end-start)
+            #    print("Motif" + str(times["Motif"]))
+            self.string += "\t".join(row)+'\n'
+            count += 1
+            if count % 10000 == 0:
+                self.t_lock.acquire()
+                self.out_tsv.write(self.string)
+                self.t_lock.release()
+                self.string = ""
 
 
 def filter_insertions(input_tsv, output_tsv, bam_list, fastq_list, contromeres, telomeres, control_sample, min_mapq, ref, cluster_window, chrs_to_use, min_reads, threads):
@@ -445,8 +481,9 @@ def filter_insertions(input_tsv, output_tsv, bam_list, fastq_list, contromeres, 
                         if record.reference_name not in softclips:
                             softclips[record.reference_name] = defaultdict(set)
                         for item in nearby:
-                            pos = item.split(':')[5]
-                            softclips[record.reference_name][pos].add(record.query_name)
+                            for j in nearby[item]:
+                                pos = j.split(':')[5]
+                                softclips[record.reference_name][pos].add(record.query_name)
             elif cg_tuples[len(cg_tuples)-1][0] == 4 or cg_tuples[len(cg_tuples)-1][0] == 5:
                 # Record starts with a hard or softclip
                 if cg_tuples[len(cg_tuples)-1][1] >= 100:
@@ -457,8 +494,9 @@ def filter_insertions(input_tsv, output_tsv, bam_list, fastq_list, contromeres, 
                         if record.reference_name not in softclips:
                             softclips[record.reference_name] = defaultdict(set)
                         for item in nearby:
-                            pos = item.split(':')[5]
-                            softclips[record.reference_name][pos].add(record.query_name)
+                            for j in nearby[item]:
+                                pos = j.split(':')[5]
+                                softclips[record.reference_name][pos].add(record.query_name)
             nearby = all_positions[record.reference_name][record.reference_start:record.reference_end]
             if len(nearby) > 0:
                 if record.mapping_quality >= min_mapq:
