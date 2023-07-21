@@ -102,10 +102,11 @@ def merge_all(args, bams, tsvs):
     pysam.index(args.output_dir+"/"+args.bam_prefix+".tmp.bam")
     for bam in bams:
         os.remove(bam)
+    print("Merge_all")
     bams = [args.output_dir+"/"+args.bam_prefix+".tmp.bam"]
     # Read in the reads in the tmp bam. Get their names, and then write out the remaining records
     seen = {}
-    header = pysam.AlignmentFile(args.bam_list.split(',')[0]).header
+    header = pysam.AlignmentFile(args.output_dir+"/"+args.bam_prefix+".tmp.bam").header
     reader = pysam.AlignmentFile(args.output_dir+"/"+args.bam_prefix+".tmp.bam")
     for record in reader.fetch():
         seen[record.query_name] = 1
@@ -201,7 +202,7 @@ merge_parser.add_argument('--tsv-prefix', type=str, required=True)
 merge_parser.add_argument('--chromosome-list', type=str, required=False, default="all_main")
 merge_parser.add_argument('--bam-list', type=str, required=True)
 
-#classify_parser.add_argument('--bam-list', type=str, required=True)
+classify_parser.add_argument('--bam-list', type=str, required=False)
 classify_parser.add_argument('--sample-list', type=str, required=True)
 classify_parser.add_argument('--realign-tsv', type=str, required=False)
 classify_parser.add_argument('--tsv-list', type=str, required=True)
@@ -211,8 +212,8 @@ classify_parser.add_argument('--fastq-list', type=str, required=True)
 
 filter_parser.add_argument('--input-tsv', type=str, required=True)
 filter_parser.add_argument('--output-tsv', type=str, required=True)
-filter_parser.add_argument('--centromeres', type=str, required=True)
-filter_parser.add_argument('--telomeres', type=str, required=True)
+filter_parser.add_argument('--centromeres', type=str, required=False, default=None)
+filter_parser.add_argument('--telomeres', type=str, required=False, default=None)
 filter_parser.add_argument('--bam', type=str, required=True)
 filter_parser.add_argument('--fastq-list', type=str, required=True)
 filter_parser.add_argument('--control-sample', type=str, required=False, default="NA")

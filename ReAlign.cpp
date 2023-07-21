@@ -763,7 +763,7 @@ bool project_alignment(int hap_start, std::vector<std::pair<int,int>> hap_insert
 	string hap_to_ref_cigar = "";
 	int count_cigar_ops = 0;
 	bool print = false;
-	//if(read_name == "f954498b-fef4-4355-9e9a-155e66bd0bce"){
+	//if(read_name == "1cd8d8c5-c150-4ad6-a9df-ddbd8ac5d39c"){
 	//	print = true;
 	//	cerr << read_name <<  endl;
 	//	cerr << startLocation << "\t" << hap_start <<"\t" << endLocation << endl;
@@ -906,12 +906,14 @@ bool project_alignment(int hap_start, std::vector<std::pair<int,int>> hap_insert
 			out_lock.unlock();
 			return false;
 		}
-		if(read_insert_start > 0 && read_insert_end > 0 && read_insert_end - read_insert_start >= 50){
+		if(read_insert_start > 0 && read_insert_end > 0){
 			// add to the map for hap name
 			if(print){
 				cout << t << " " << hap_names.size() << " hap names " << read_insert_start << " " << read_insert_end << " " << hap_name_count << endl;
 			}
-			hap_to_read_pos[hap_names[hap_name_count]] = make_pair(read_insert_start, read_insert_end);
+			if(read_insert_end - read_insert_start >= 50){
+				hap_to_read_pos[hap_names[hap_name_count]] = make_pair(read_insert_start, read_insert_end);
+			}
 			hap_name_count += 1;
 			read_insert_start = -1;
 			read_insert_end = -1;
@@ -1191,7 +1193,7 @@ std::vector<std::tuple<int,int,int>> get_insert_position(std::string& cigar, int
 	return larger_inserts;
 }
 
-std::unordered_map<int, std::vector<std::tuple<int, int, std::string, int, int, int, std::string>>> get_consensus_hap(const int start, const std::string& chrom, const std::string& ref_sequence, const std::unordered_map<std::string, std::vector<TsvRecord>>& inserts_per_sample, const int ref_window, std::unordered_map<std::string, std::unordered_map<std::string,std::string>>& read_sequences_per_sample, int gap_open, int gap_extend, int t, const int max_mem, const int high_mem, const int window, mm_tbuf_t *tbuf, const int max_insert_size, const int max_depth, const int max_con){
+std::unordered_map<int, std::vector<std::tuple<int, int, std::string, int, int, int, std::string>>> get_consensus_hap(const int start, const std::string& chrom, const std::string& ref_sequence, const std::unordered_map<std::string, std::vector<TsvRecord>>& inserts_per_sample, const int ref_window, std::unordered_map<std::string, std::unordered_map<std::string,std::string>>& read_sequences_per_sample, int gap_open, int gap_extend, int t, const int max_mem, const int high_mem, const int window, mm_tbuf_t *tbuf, const int max_insert_size, const int max_depth, int max_con, int min_reads){
 	// Extract the read sequences of any insert supporting reads in this window.
 	// Compute a consensus for them, select the largest one
 	using namespace std;
@@ -1264,6 +1266,9 @@ std::unordered_map<int, std::vector<std::tuple<int, int, std::string, int, int, 
 		cerr << "Have " << n_seqs << endl;
 	}
 	vector<string> hap_sequences;
+	if(n_seqs < min_reads){
+		return corrected_seqs;
+	}
 	if(n_seqs > 1){
 		/*
 		Legacy code for SPOA 
@@ -1279,7 +1284,9 @@ std::unordered_map<int, std::vector<std::tuple<int, int, std::string, int, int, 
 			cerr << "consensus is  " << hap_sequence.length() << endl;
 		}
 		*/
-
+		if(n_seqs < max_con){
+			max_con = n_seqs;
+		}
 		if(high_mem == 1){
 			// High Mem mode
 			//cout << chrom << " " << start << " " << n_seqs << endl;
@@ -1432,6 +1439,7 @@ std::unordered_map<int, std::vector<std::tuple<int, int, std::string, int, int, 
 				abpt->w = 50, abpt->k = 17; abpt->min_w = 500; // minimizer-based seeding and partition
 				//abpt->progressive_poa = 1;
 				abpt->disable_seeding = 0;
+				abpt->max_n_cons = 1;
 				abpoa_post_set_para(abpt);
 				// Get the lengths of each hap sequence and convert from ACGT to 0123
 				int *seq_lens = (int*)malloc(sizeof(int) *  seqs_per_window[k*500].size());
@@ -1644,7 +1652,7 @@ void realign_reads(const int t, const std::unordered_map<std::string, faidx_t*>&
 			vector<pair<int,int>> added_insert_positions;
 			vector<string> hap_names;
 			bool print = false;
-			//if(read_name == "b2e13b6b-3cc1-4299-b20a-57016d458675" || read_name == "6c511c9c-77c2-4026-9641-aea24487fd04"){
+			//if(read_name == "1cd8d8c5-c150-4ad6-a9df-ddbd8ac5d39c" || read_name == "e035c451-f773-4a39-bfb6-5b2e82d41029"){
 			//	print = true;
 			//	cout << read_name << endl;
 			//}
@@ -1725,7 +1733,7 @@ void haps_only_chrom(const int t, const std::unordered_map<std::string, std::map
 
 		// -- Make a parameters struct
 		// -- Return a struct 
-		unordered_map<int, vector<tuple<int, int, string, int, int, int, string>>> consensus_tuples = get_consensus_hap(pos, chrom, ref_sequence, inserts_per_sample, max_read_len, read_sequences_per_sample, gap_open, gap_extend, t, max_mem, high_mem, window, tbuf, max_insert_size, depth_filter, max_con);
+		unordered_map<int, vector<tuple<int, int, string, int, int, int, string>>> consensus_tuples = get_consensus_hap(pos, chrom, ref_sequence, inserts_per_sample, max_read_len, read_sequences_per_sample, gap_open, gap_extend, t, max_mem, high_mem, window, tbuf, max_insert_size, depth_filter, max_con, 3);
 		for(size_t h = 0; h < consensus_tuples.size(); h++){
 			string hap_names = "";
 			int window_to_use = 100000;
@@ -1812,7 +1820,7 @@ void realign_chrom(const int t, const std::unordered_map<std::string, std::map<i
 		// -- Make a parameters struct
 		// -- Return a struct 
 		auto start1 = chrono::high_resolution_clock::now();
-		unordered_map<int, vector<tuple<int, int, string, int, int, int, string>>> consensus_tuples = get_consensus_hap(pos, chrom, ref_sequence, inserts_per_sample, max_read_len, read_sequences_per_sample, gap_open, gap_extend, t, max_mem, high_mem, window, tbuf, max_insert_size, depth_filter, max_con);
+		unordered_map<int, vector<tuple<int, int, string, int, int, int, string>>> consensus_tuples = get_consensus_hap(pos, chrom, ref_sequence, inserts_per_sample, max_read_len, read_sequences_per_sample, gap_open, gap_extend, t, max_mem, high_mem, window, tbuf, max_insert_size, depth_filter, max_con, 1);
 		// Get a set of alternative haplotypes for the window
 		//if(consensus_tuples.size() == 0){
 			//cout << t << " Getting hap_set " << endl;

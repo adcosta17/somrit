@@ -135,13 +135,18 @@ def classify_insertions(tsv_list, control_sequences_file, output_tsv, fastq_list
                     if row[3] in realigned_reads:
                         # Have re-aligned this read already
                         continue
-                    result = get_annotation(row[7], control_aligner, False)
+                    seq = row[7]
+                    try:
+                        seq = fastqs[i].fetch(row[3])[int(row[4]):int(row[5])]
+                    except:
+                        pass
+                    result = get_annotation(seq, control_aligner, False)
                     annotation = row[8]
                     if "No_Mapping" in result:
                         if annotation == "PASS":
                             annotation = "no_rt_mapping"
                         else: 
                             annotation += ",no_rt_mapping"
-                    out_tsv.write(row[0]+"\t"+row[1]+"\t"+row[2]+"\t"+row[3]+":"+row[4]+"-"+row[5]+"\t"+row[7]+"\t"+sample+":"+row[3]+":"+row[6]+":"+row[4]+"-"+row[5]+"\t"+annotation+"\t"+"\t".join(result)+"\n")
+                    out_tsv.write(row[0]+"\t"+row[1]+"\t"+row[2]+"\t"+row[3]+":"+row[4]+"-"+row[5]+"\t"+seq+"\t"+sample+":"+row[3]+":"+row[6]+":"+row[4]+"-"+row[5]+"\t"+annotation+"\t"+"\t".join(result)+"\n")
 
 

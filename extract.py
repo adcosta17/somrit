@@ -249,7 +249,7 @@ def get_record_info(record):
     read_start, read_end, cigarstring = strip_soft_hard(record.cigarstring)
     return Record(query_name, orientation, ref_name, ref_start, ref_end, mapq, cigarstring, read_start, read_end, False)
 
-def merge_records(records, header, reference_gap_minimum, minimum_mapping_qual, min_detected_inclusion_length, f_lock):
+def merge_records(records, header, reference_gap_minimum, minimum_mapping_qual, min_detected_inclusion_length, min_flank_size, f_lock):
     # Assume that records has been sorted by chromsosme and position
     records_to_return = {}
     alignments_to_output = []
@@ -267,6 +267,7 @@ def merge_records(records, header, reference_gap_minimum, minimum_mapping_qual, 
             if (record_1.query_name != record_2.query_name or 
                 record_1.reference_name != record_2.reference_name or
                 record_1.is_reverse != record_2.is_reverse or
+                record_1.query_alignment_length < 500 or record_2.query_alignment_length < 500 or
                 (record_1.reference_length + record_2.reference_length) > 1.2* get_read_length(record_1.cigarstring) or
                 (abs(record_1.reference_end - record_2.reference_start) > int(reference_gap_minimum) and 
                 abs(record_2.reference_end - record_1.reference_start) > int(reference_gap_minimum)) or
@@ -437,8 +438,7 @@ def get_tsv_record(record, max_ref_gap_at_candidate, min_detected_inclusion_leng
         if record.merged:
             merged = True
         annotation = read_annotation
-        if not ((abs(ref_start - record.ref_start) > int(min_flank_size)) and 
-            (abs(record.ref_end - ref_end) > int(min_flank_size))):
+        if (read_start < int(min_flank_size)) or (read_end < int(min_flank_size)) or (abs(read_start - len(read_seq)) < int(min_flank_size)) or (abs(read_end - len(read_seq)) < int(min_flank_size)):
             annotation = update_annotation(annotation, "flank_size")
         if not read_end-read_start >= min_insertion_length:
             annotation = update_annotation(annotation, "min_insertion_length")
@@ -500,7 +500,7 @@ class myThread (threading.Thread):
                 # Go read by read based on sorted records. Merge first and then extract
             else:
                 records = record_list
-            new_records = merge_records(records, self.header, self.reference_gap_minimum, self.min_mapq, self.min_detected_inclusion_length, self.f_lock)
+            new_records = merge_records(records, self.header, self.reference_gap_minimum, self.min_mapq, self.min_detected_inclusion_length, self.min_flank_size, self.f_lock)
             for c in new_records:
                 inserts, merged = get_tsv_record(new_records[c], self.reference_gap_minimum, self.min_detected_inclusion_length, self.min_mapq, self.min_insertion_length, self.min_flank_size, self.min_read_len, self.in_fq, self.f_lock)
                 self.t_lock.acquire()
