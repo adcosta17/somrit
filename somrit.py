@@ -215,7 +215,6 @@ filter_parser.add_argument('--output-tsv', type=str, required=True)
 filter_parser.add_argument('--centromeres', type=str, required=False, default=None)
 filter_parser.add_argument('--telomeres', type=str, required=False, default=None)
 filter_parser.add_argument('--bam', type=str, required=True)
-filter_parser.add_argument('--fastq-list', type=str, required=True)
 filter_parser.add_argument('--control-sample', type=str, required=False, default="NA")
 filter_parser.add_argument('--min-mapq', type=int, required=False, default=20)
 filter_parser.add_argument('--min-reads', type=int, required=False, default=1)
@@ -363,6 +362,6 @@ elif sys.argv[1] == "filter":
     threads = args.threads - 1
     if threads <= 0:
         threads = 1
-    filter_insertions(args.input_tsv, args.output_tsv, args.bam, args.fastq_list, centromeres, telomeres, args.control_sample, args.min_mapq, args.reference_genome, args.cluster_window, chr_to_use, args.min_reads, threads)
+    filter_insertions(args.input_tsv, args.output_tsv, args.bam, "NA", centromeres, telomeres, args.control_sample, args.min_mapq, args.reference_genome, args.cluster_window, chr_to_use, args.min_reads, threads)
     pass
 
