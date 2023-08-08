@@ -2,6 +2,8 @@
 
 Somrit is a toolkit designed to identify and analyze Somatic Retrotransposon Insertions from Long Reads. It consists of 5 modules designed to be run on their own or together in sequence as part of a larger analysis.
 
+A pre-print describing somrit is available [here](https://www.biorxiv.org/content/10.1101/2023.08.06.552193v2) and the scripts used to test somrit can be found [here](https://github.com/adcosta17/somrit-test).
+
 ## Dependencies
 
 - pysam
