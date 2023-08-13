@@ -31,6 +31,16 @@ make minimap2/libminimap2.a
 make 
 ```
 
+## Example Usage and Test Data
+
+An example snakemake file that can be used to run all 4 somrit modules for a single sample is provided in the ```example_snakemake``` folder. While each of somrit's modules is described in more detail below the example snakemake file provides a simple way to run all 4 somrit modules in their default settings, and can be used as a base for modification by the user if they need to adjust parameters or include multiple samples. Test data in the form of a BAM file and fastq of reads is provided in the ```test_data``` folder. The ```test_before.bam``` are the alignments of the reads in the ```test.fastq.gz``` file to GRCh38 prior to realignment, with the ```test_after.bam``` being the realigned BAM file. 
+
+```
+cd example_snakemake
+snakemake -s example.smk --configfile project_config.yaml all
+```
+
+
 ## Modules
 
 Somrit consists of 4 modules that can be run on their own given the correct input or as part of a larger analysis. Each module is described in more detail below. Each module has its own CLI and is run using the following format: 
