@@ -74,7 +74,7 @@ python somrit.py extract --bam <input.bam> --output-tsv <output.tsv> --output-me
 
 **--min-mapq** Sets the minimum mapping quality a read alignment must have [20]
 
-**--min-read-len** Sets the minimum read length to identify insertions from [1000bp]
+**--min-read-len** Sets the minimum read length to identify insertions from [7000bp]
 
 **--min-flank-size** Sets the minimum flank required on each side of the insertion [500bp]
 
