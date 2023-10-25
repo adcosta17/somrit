@@ -1,3 +1,9 @@
+#---------------------------------------------------------
+# Copyright 2023 Ontario Institute for Cancer Research
+# Written by Alister D'Costa (alister.d'costa@oicr.on.ca)
+#---------------------------------------------------------
+# classify.py
+
 import argparse
 import sys
 import re

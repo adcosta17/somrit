@@ -1,3 +1,10 @@
+//---------------------------------------------------------
+// Copyright 2023 Ontario Institute for Cancer Research
+// Written by Alister D'Costa (alister.d'costa@oicr.on.ca)
+//---------------------------------------------------------
+// ReAlign.cpp
+
+
 #include <iostream>
 #include <unistd.h>
 #include <sstream>
