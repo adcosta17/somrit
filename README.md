@@ -33,7 +33,7 @@ make
 
 ## Example Usage and Test Data
 
-An example snakemake file that can be used to run all 4 somrit modules for a single sample is provided in the ```example_snakemake``` folder. While each of somrit's modules is described in more detail below the example snakemake file provides a simple way to run all 4 somrit modules in their default settings, and can be used as a base for modification by the user if they need to adjust parameters or include multiple samples. Test data in the form of a BAM file and fastq of reads is provided in the ```test_data``` folder. The ```test_before.bam``` are the alignments of the reads in the ```test.fastq.gz``` file to GRCh38 prior to realignment, with the ```test_after.bam``` being the realigned BAM file. 
+An example snakemake file that can be used to run all 4 somrit modules for a single sample is provided in the ```example_snakemake``` folder. While each of somrit's modules is described in more detail below the example snakemake file provides a simple way to run all 4 somrit modules in their default settings, and can be used as a base for modification by the user if they need to adjust parameters or include multiple samples. Test data in the form of a BAM file and fastq of reads is provided in the ```test_data``` folder. The ```test_before.bam``` are the alignments of the reads in the ```test.fastq.gz``` file to GRCh38 prior to realignment, with the ```test_after.bam``` being the realigned BAM file. Note if running the test data as is only chromosome 11 should be specified in the ```project_config.yaml```.
 
 ```
 cd example_snakemake
